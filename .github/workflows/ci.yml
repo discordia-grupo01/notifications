@@ -8,8 +8,29 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    services:
+      mongo:
+        image: mongo:7
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ping: 1})'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      rabbitmq:
+        image: rabbitmq:3.13-management-alpine
+        ports: ["5672:5672", "15672:15672"]
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
       - uses: erlef/setup-beam@v1
         with:
           elixir-version: "1.16"
@@ -33,7 +54,21 @@ jobs:
         run: mix credo --strict
 
       - run: mix compile --warnings-as-errors
-      - run: mix test --cover
+
+      - name: Regenerar openapi.yaml
+        run: make openapi
+      - name: Commitear openapi.yaml si cambió
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "docs(openapi): regenerate openapi.yaml [skip ci]"
+          file_pattern: openapi.yaml
+
+      - name: Tests (unitarios + integracion contra Mongo y RabbitMQ reales; falla si la cobertura < 70%)
+        env:
+          MIX_ENV: test
+          MONGO_URL: mongodb://localhost:27017/notifications_test
+          RABBITMQ_URL: amqp://guest:guest@localhost:5672
+        run: mix coveralls
 
       - name: Analisis estatico (Dialyzer)
         run: mix dialyzer

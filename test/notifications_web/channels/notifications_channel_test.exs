@@ -1,0 +1,402 @@
+defmodule NotificationsWeb.NotificationsChannelTest do
+  use NotificationsWeb.ChannelCase, async: false
+  import Mox
+
+  alias Notifications.Auth.TicketStoreMock
+  alias Notifications.AuthFixtures
+  alias Notifications.Unread.RepoMock
+  alias NotificationsWeb.{Endpoint, NotificationsChannel, UserSocket}
+
+  setup :set_mox_global
+  setup :verify_on_exit!
+
+  @me "11111111-1111-4111-8111-111111111111"
+  @other "22222222-2222-4222-8222-222222222222"
+  @s1 "server-1"
+  @c1 "channel-1"
+  @c2 "channel-2"
+  @m1 "00000000-0000-7000-8000-000000000001"
+  @m2 "00000000-0000-7000-8000-000000000002"
+  @m3 "00000000-0000-7000-8000-000000000003"
+
+  setup do
+    {:ok, world} = Agent.start_link(fn -> %{channels: [@c1, @c2], activity: %{}, reads: %{}} end)
+
+    stub(RepoMock, :list_memberships, fn @me ->
+      {:ok,
+       [
+         %{
+           "server_id" => @s1,
+           "user_id" => @me,
+           "role_ids" => ["everyone"],
+           "joined_at" => ~U[1970-01-01 00:00:00Z]
+         }
+       ]}
+    end)
+
+    stub(RepoMock, :get_server_owners, fn _ids -> {:ok, %{}} end)
+
+    stub(RepoMock, :list_roles, fn _ids ->
+      {:ok,
+       [
+         %{
+           "_id" => "everyone",
+           "server_id" => @s1,
+           "permissions" => ["VIEW_CHANNELS"],
+           "is_everyone" => true
+         }
+       ]}
+    end)
+
+    stub(RepoMock, :list_channels, fn _ids ->
+      channels = Agent.get(world, & &1.channels)
+      {:ok, Enum.map(channels, &%{"_id" => &1, "server_id" => @s1, "kind" => "text"})}
+    end)
+
+    stub(RepoMock, :list_overrides, fn _ids -> {:ok, []} end)
+    stub(RepoMock, :get_activity, fn _ids -> {:ok, Agent.get(world, & &1.activity)} end)
+    stub(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, Agent.get(world, & &1.reads)} end)
+    stub(RepoMock, :get_mention_markers, fn @me, _ids -> {:ok, %{}} end)
+
+    stub(RepoMock, :get_channel, fn id ->
+      if id in Agent.get(world, & &1.channels),
+        do: %{"_id" => id, "server_id" => @s1, "kind" => "text"},
+        else: nil
+    end)
+
+    {:ok, world: world}
+  end
+
+  defp put_world(world, key, value), do: Agent.update(world, &Map.put(&1, key, value))
+
+  defp socket_for(user_id) do
+    stub(TicketStoreMock, :take, fn _id -> {:ok, AuthFixtures.ticket_doc(user_id)} end)
+    {:ok, socket} = connect(UserSocket, %{"ticket" => "a-ticket"})
+    socket
+  end
+
+  defp join_own(user_id \\ @me) do
+    {:ok, _reply, socket} =
+      subscribe_and_join(socket_for(user_id), NotificationsChannel, "notifications:" <> user_id)
+
+    socket
+  end
+
+  defp message_created(channel_id, message_id, opts \\ []) do
+    Endpoint.broadcast("server:" <> @s1, "message_created", %{
+      "server_id" => @s1,
+      "channel_id" => channel_id,
+      "message_id" => message_id,
+      "author_id" => Keyword.get(opts, :author, @other),
+      "mentioned_user_ids" => Keyword.get(opts, :mentions, [])
+    })
+  end
+
+  describe "join" do
+    test "a user joins their own topic" do
+      assert {:ok, _reply, _socket} =
+               subscribe_and_join(socket_for(@me), NotificationsChannel, "notifications:" <> @me)
+    end
+
+    test "nobody can listen to another user's notifications" do
+      assert {:error, %{error: %{code: "FORBIDDEN"}}} =
+               subscribe_and_join(
+                 socket_for(@me),
+                 NotificationsChannel,
+                 "notifications:" <> @other
+               )
+    end
+
+    test "CA1/CA2: pushes the unread snapshot right after joining", %{world: world} do
+      put_world(world, :activity, %{@c1 => @m2})
+      put_world(world, :reads, %{@c1 => @m1})
+      join_own()
+
+      assert_push "snapshot", %{
+        "servers" => [
+          %{
+            "server_id" => @s1,
+            "unread" => true,
+            "mention" => false,
+            "channels" => [%{"channel_id" => @c1, "unread" => true, "mention" => false}]
+          }
+        ]
+      }
+    end
+
+    test "the snapshot is empty when everything is read" do
+      join_own()
+
+      assert_push "snapshot", %{"servers" => []}
+    end
+  end
+
+  describe "live updates" do
+    test "CA1/CA2: a new message in a channel marks the channel and its server unread" do
+      join_own()
+      assert_push "snapshot", _
+
+      message_created(@c1, @m1)
+
+      assert_push "unread_updated", %{
+        "server_id" => @s1,
+        "channel_id" => @c1,
+        "unread" => true,
+        "mention" => false,
+        "server" => %{"unread" => true, "mention" => false}
+      }
+    end
+
+    test "CA3: a message that mentions the user is pushed as a mention" do
+      join_own()
+      assert_push "snapshot", _
+
+      message_created(@c1, @m1, mentions: [@me])
+
+      assert_push "unread_updated", %{
+        "channel_id" => @c1,
+        "unread" => true,
+        "mention" => true,
+        "server" => %{"unread" => true, "mention" => true}
+      }
+    end
+
+    test "a message that mentions someone else is not a mention" do
+      join_own()
+      assert_push "snapshot", _
+
+      message_created(@c1, @m1, mentions: [@other])
+
+      assert_push "unread_updated", %{"mention" => false, "unread" => true}
+    end
+
+    test "the user's own message produces no notification" do
+      join_own()
+      assert_push "snapshot", _
+
+      message_created(@c1, @m1, author: @me)
+
+      refute_push "unread_updated", _
+    end
+
+    test "a second message in an already unread channel produces no new push" do
+      join_own()
+      assert_push "snapshot", _
+
+      message_created(@c1, @m1)
+      assert_push "unread_updated", _
+      message_created(@c1, @m2)
+
+      refute_push "unread_updated", _
+    end
+
+    test "a later mention in an already unread channel is pushed because the flags changed" do
+      join_own()
+      assert_push "snapshot", _
+
+      message_created(@c1, @m1)
+      assert_push "unread_updated", %{"mention" => false}
+      message_created(@c1, @m2, mentions: [@me])
+
+      assert_push "unread_updated", %{"mention" => true}
+    end
+
+    test "messages from channels the user cannot see are ignored" do
+      join_own()
+      assert_push "snapshot", _
+
+      message_created("hidden-channel", @m1)
+
+      refute_push "unread_updated", _
+    end
+
+    test "the server stays unread while any of its channels is" do
+      join_own()
+      assert_push "snapshot", _
+
+      message_created(@c1, @m1)
+      assert_push "unread_updated", _
+      message_created(@c2, @m2)
+      assert_push "unread_updated", %{"channel_id" => @c2}
+    end
+  end
+
+  describe "mark_read" do
+    test "CA1/CA2: reading a channel clears it and its server and tells the user's other sessions" do
+      expect(RepoMock, :mark_read, fn @me, @c1, @s1, @m1 -> :ok end)
+      stub(RepoMock, :get_activity, fn _ids -> {:ok, %{@c1 => @m1}} end)
+      Endpoint.subscribe("user:" <> @me)
+      socket = join_own()
+      assert_push "snapshot", %{"servers" => [%{"unread" => true}]}
+
+      ref = push(socket, "mark_read", %{"channel_id" => @c1})
+
+      assert_reply ref, :ok
+
+      assert_push "unread_updated", %{
+        "channel_id" => @c1,
+        "unread" => false,
+        "mention" => false,
+        "server" => %{"unread" => false}
+      }
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "read",
+        payload: %{"channel_id" => @c1, "message_id" => @m1}
+      }
+    end
+
+    test "reading up to a given message keeps newer messages unread" do
+      expect(RepoMock, :mark_read, fn @me, @c1, @s1, @m2 -> :ok end)
+      stub(RepoMock, :get_activity, fn _ids -> {:ok, %{@c1 => @m3}} end)
+      socket = join_own()
+      assert_push "snapshot", _
+
+      ref = push(socket, "mark_read", %{"channel_id" => @c1, "message_id" => @m2})
+
+      assert_reply ref, :ok
+      refute_push "unread_updated", _
+    end
+
+    test "another session of the same user reading the channel clears it here" do
+      stub(RepoMock, :get_activity, fn _ids -> {:ok, %{@c1 => @m1}} end)
+      join_own()
+      assert_push "snapshot", %{"servers" => [%{"unread" => true}]}
+
+      Endpoint.broadcast("user:" <> @me, "read", %{"channel_id" => @c1, "message_id" => @m1})
+
+      assert_push "unread_updated", %{"channel_id" => @c1, "unread" => false}
+    end
+
+    test "a channel the user cannot see is forbidden", %{world: world} do
+      put_world(world, :channels, [@c1])
+
+      stub(RepoMock, :get_channel, fn _id ->
+        %{"_id" => "x", "server_id" => @s1, "kind" => "text"}
+      end)
+
+      socket = join_own()
+      assert_push "snapshot", _
+
+      ref = push(socket, "mark_read", %{"channel_id" => "x"})
+
+      assert_reply ref, :error, %{error: %{code: "FORBIDDEN"}}
+    end
+
+    test "an unknown channel is not found" do
+      stub(RepoMock, :get_channel, fn _id -> nil end)
+      socket = join_own()
+      assert_push "snapshot", _
+
+      ref = push(socket, "mark_read", %{"channel_id" => "nope"})
+
+      assert_reply ref, :error, %{error: %{code: "CHANNEL_NOT_FOUND"}}
+    end
+
+    test "a channel without messages replies ok and writes nothing" do
+      socket = join_own()
+      assert_push "snapshot", _
+
+      ref = push(socket, "mark_read", %{"channel_id" => @c1})
+
+      assert_reply ref, :ok
+    end
+
+    test "a storage failure is reported as unavailable" do
+      stub(RepoMock, :get_activity, fn _ids -> {:ok, %{@c1 => @m1}} end)
+      stub(RepoMock, :mark_read, fn _u, _c, _s, _m -> {:error, :timeout} end)
+      socket = join_own()
+      assert_push "snapshot", _
+
+      ref = push(socket, "mark_read", %{"channel_id" => @c1})
+
+      assert_reply ref, :error, %{error: %{code: "UNREAD_UNAVAILABLE"}}
+    end
+
+    test "a payload without channel_id is invalid" do
+      socket = join_own()
+      assert_push "snapshot", _
+
+      ref = push(socket, "mark_read", %{})
+
+      assert_reply ref, :error, %{error: %{code: "INVALID_PAYLOAD"}}
+    end
+  end
+
+  describe "resync" do
+    test "a resync broadcast reloads the snapshot", %{world: world} do
+      join_own()
+      assert_push "snapshot", %{"servers" => []}
+
+      put_world(world, :activity, %{@c1 => @m1})
+      Endpoint.broadcast("user:" <> @me, "resync", %{})
+
+      assert_push "snapshot", %{"servers" => [%{"server_id" => @s1}]}
+    end
+
+    test "losing access to a channel drops it from the state", %{world: world} do
+      put_world(world, :activity, %{@c1 => @m1})
+      join_own()
+      assert_push "snapshot", %{"servers" => [%{"channels" => [_one]}]}
+
+      put_world(world, :channels, [@c2])
+      Endpoint.broadcast("server:" <> @s1, "resync", %{})
+
+      assert_push "snapshot", %{"servers" => []}
+    end
+
+    test "the client can ask for the snapshot again" do
+      socket = join_own()
+      assert_push "snapshot", _
+
+      ref = push(socket, "snapshot", %{})
+
+      assert_reply ref, :ok
+      assert_push "snapshot", _
+    end
+
+    test "a failed reload keeps the connection and the previous state" do
+      socket = join_own()
+      assert_push "snapshot", _
+
+      stub(RepoMock, :list_memberships, fn @me -> {:error, :timeout} end)
+      ref = push(socket, "snapshot", %{})
+
+      assert_reply ref, :error, %{error: %{code: "UNREAD_UNAVAILABLE"}}
+      Endpoint.broadcast("user:" <> @me, "resync", %{})
+      message_created(@c1, @m1)
+      assert_push "unread_updated", %{"channel_id" => @c1}
+    end
+  end
+
+  test "an unknown event is rejected" do
+    socket = join_own()
+    assert_push "snapshot", _
+
+    ref = push(socket, "nope", %{})
+
+    assert_reply ref, :error, %{error: %{code: "INVALID_PAYLOAD"}}
+  end
+
+  test "the channel stops when the first snapshot cannot be built" do
+    stub(RepoMock, :list_memberships, fn @me -> {:error, :timeout} end)
+    Process.flag(:trap_exit, true)
+
+    try do
+      subscribe_and_join(socket_for(@me), NotificationsChannel, "notifications:" <> @me)
+    catch
+      :exit, _reason -> :ok
+    end
+
+    assert_receive {:EXIT, _pid, :snapshot_failed}, 1_000
+  end
+
+  test "unrelated broadcasts are ignored" do
+    join_own()
+    assert_push "snapshot", _
+
+    Endpoint.broadcast("user:" <> @me, "something_else", %{})
+
+    refute_push "unread_updated", _
+  end
+end
