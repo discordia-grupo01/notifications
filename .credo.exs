@@ -1,3 +1,8 @@
+logger_metadata =
+  "config/config.exs"
+  |> Config.Reader.read!(env: :prod)
+  |> get_in([:logger, :console, :metadata])
+
 %{
   configs: [
     %{
@@ -8,11 +13,13 @@
       },
       strict: true,
       checks: %{
+        enabled: [
+          {Credo.Check.Warning.MissedMetadataKeyInLoggerConfig, [metadata_keys: logger_metadata]}
+        ],
         disabled: [
-          # Dejamos TODOs a proposito como placeholders de trabajo pendiente.
-          # No tiene sentido que bloqueen el pipeline.
           {Credo.Check.Design.TagTODO, []},
-          {Credo.Check.Design.TagFIXME, []}
+          {Credo.Check.Design.TagFIXME, []},
+          {Credo.Check.Readability.ModuleDoc, []}
         ]
       }
     }
