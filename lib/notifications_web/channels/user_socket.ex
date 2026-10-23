@@ -1,0 +1,20 @@
+defmodule NotificationsWeb.UserSocket do
+  use Phoenix.Socket
+
+  alias Notifications.Auth.SocketTicket
+
+  channel "notifications:*", NotificationsWeb.NotificationsChannel
+
+  @impl true
+  def connect(%{"ticket" => ticket}, socket, _connect_info) when is_binary(ticket) do
+    case SocketTicket.redeem(ticket) do
+      {:ok, %{user_id: user_id}} -> {:ok, assign(socket, user_id: user_id)}
+      {:error, :invalid_ticket} -> :error
+    end
+  end
+
+  def connect(_params, _socket, _connect_info), do: :error
+
+  @impl true
+  def id(socket), do: "notifications_socket:" <> socket.assigns.user_id
+end
