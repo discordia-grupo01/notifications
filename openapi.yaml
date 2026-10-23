@@ -1,0 +1,133 @@
+---
+components:
+  responses: {}
+  schemas:
+    ErrorResponse:
+      properties:
+        error:
+          properties:
+            code:
+              type: string
+              x-struct:
+              x-validate:
+            details:
+              type: object
+              x-struct:
+              x-validate:
+            message:
+              type: string
+              x-struct:
+              x-validate:
+          required:
+            - code
+            - message
+            - details
+          type: object
+          x-struct:
+          x-validate:
+      required:
+        - error
+      title: ErrorResponse
+      type: object
+      x-struct: Elixir.NotificationsWeb.Schemas.ErrorResponse
+      x-validate:
+    SocketTicket:
+      properties:
+        expires_in:
+          description: Segundos que el ticket es válido desde que se emite.
+          type: integer
+          x-struct:
+          x-validate:
+        ticket:
+          description: Ticket de un solo uso. Se manda como `?ticket=<ticket>` al conectar el WebSocket.
+          type: string
+          x-struct:
+          x-validate:
+      required:
+        - ticket
+        - expires_in
+      title: SocketTicket
+      type: object
+      x-struct: Elixir.NotificationsWeb.Schemas.SocketTicket
+      x-validate:
+info:
+  description: 'Indicadores de no leído por canal y por servidor. Todo el estado viaja por WebSocket (canal `notifications:<user_id>` en `/notifications/socket`): al unirse se recibe el estado completo y después los cambios en vivo. Lo único que se pide por REST es el ticket para abrir ese socket.'
+  title: Discordia — Notifications
+  version: 0.1.0
+openapi: 3.0.0
+paths:
+  /livez:
+    get:
+      callbacks: {}
+      operationId: NotificationsWeb.HealthController.livez
+      parameters: []
+      responses:
+        '200':
+          content:
+            text/plain:
+              schema:
+                type: string
+                x-struct:
+                x-validate:
+          description: ok
+      summary: Liveness -- confirma que el proceso responde, sin tocar Mongo ni el broker
+      tags:
+        - ops
+  /readyz:
+    get:
+      callbacks: {}
+      operationId: NotificationsWeb.HealthController.readyz
+      parameters: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                x-struct:
+                x-validate:
+          description: ready
+        '503':
+          content:
+            application/json:
+              schema:
+                type: object
+                x-struct:
+                x-validate:
+          description: Mongo no responde
+      summary: Readiness -- confirma que el servicio puede operar (pinguea Mongo)
+      tags:
+        - ops
+  /v1/notifications/socket-tickets:
+    post:
+      callbacks: {}
+      description: El navegador no puede mandar el header Authorization al abrir un WebSocket, y poner el JWT en la URL lo deja en logs. En su lugar, el cliente pide acá un ticket (autenticado con el Bearer normal) y conecta con `?ticket=<ticket>`.
+      operationId: NotificationsWeb.SocketTicketController.create
+      parameters: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SocketTicket'
+          description: Ticket emitido
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: 'Falta o es inválido el Authorization: Bearer <jwt>'
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: No se pudo guardar el ticket
+      summary: Emite un ticket de un solo uso para conectar el WebSocket
+      tags:
+        - auth
+security: []
+servers:
+  - url: http://localhost:4000
+    variables: {}
+tags: []
