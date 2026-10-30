@@ -35,6 +35,33 @@ defmodule Notifications.Unread do
     end
   end
 
+  @spec mark_all_read(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def mark_all_read(user_id) do
+    repo = Repo.impl()
+
+    with {:ok, visible} <- Access.visible_channels(user_id),
+         channel_ids = Enum.map(visible, & &1.channel_id),
+         {:ok, activity} <- repo.get_activity(channel_ids),
+         {:ok, reads} <- repo.get_read_markers(user_id, channel_ids) do
+      entries = unread_entries(visible, activity, reads)
+      persist_all(repo, user_id, entries)
+    end
+  end
+
+  defp unread_entries(visible, activity, reads) do
+    for %{channel_id: id, server_id: server_id, floor: floor} <- visible,
+        last = Map.get(activity, id),
+        last > Enum.max([floor, Map.get(reads, id, "")]) do
+      %{channel_id: id, server_id: server_id, message_id: last}
+    end
+  end
+
+  defp persist_all(_repo, _user_id, []), do: {:ok, 0}
+
+  defp persist_all(repo, user_id, entries) do
+    with :ok <- repo.mark_all_read(user_id, entries), do: {:ok, length(entries)}
+  end
+
   defp persist(_repo, _user_id, _channel_id, _server_id, nil), do: {:ok, nil}
 
   defp persist(repo, user_id, channel_id, server_id, up_to) do
