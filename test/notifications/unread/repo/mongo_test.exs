@@ -130,6 +130,28 @@ if mongo_url do
         assert {:ok, %{^c => ^id}} = Repo.get_mention_markers("b", [c])
       end
 
+      test "a message in an unknown channel registers it as a text channel", %{
+        server: s,
+        channel: c
+      } do
+        assert Repo.get_channel(c) == nil
+
+        record(c, s, 1, "a")
+
+        assert %{"_id" => ^c, "server_id" => ^s, "kind" => "text"} = Repo.get_channel(c)
+      end
+
+      test "a message never overwrites what is already known about the channel", %{
+        server: s,
+        channel: c
+      } do
+        Repo.upsert_channel(%{"_id" => c, "server_id" => s, "name" => "general", "kind" => "text"})
+
+        record(c, s, 1, "a")
+
+        assert %{"name" => "general"} = Repo.get_channel(c)
+      end
+
       test "the author's own message counts as read for them", %{server: s, channel: c} do
         record(c, s, 3, "author")
 

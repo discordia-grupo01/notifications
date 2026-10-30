@@ -7,7 +7,7 @@ defmodule Notifications.Events.Lifecycle do
 
   @tombstone_ttl_seconds 7 * 24 * 60 * 60
 
-  @type result :: :ok | {:ignored, :stale | :server_deleted} | {:error, term()}
+  @type result :: :ok | {:ignored, :stale | :server_deleted | :channel_deleted} | {:error, term()}
 
   @spec handle(struct()) :: result()
   def handle(%Event.ChannelCreated{} = event) do
@@ -123,6 +123,7 @@ defmodule Notifications.Events.Lifecycle do
 
   def handle(%Event.MessageCreated{} = event) do
     with :alive <- server_state(event.server_id),
+         :alive <- channel_state(event.channel_id),
          :ok <-
            repo().record_message(%{
              channel_id: event.channel_id,
@@ -159,6 +160,7 @@ defmodule Notifications.Events.Lifecycle do
   end
 
   defp outcome(:deleted, routing_key), do: ignored(:server_deleted, routing_key)
+  defp outcome(:channel_deleted, routing_key), do: ignored(:channel_deleted, routing_key)
   defp outcome({:ok, :stale}, routing_key), do: ignored(:stale, routing_key)
   defp outcome({:error, _reason} = error, _routing_key), do: error
 
@@ -168,6 +170,14 @@ defmodule Notifications.Events.Lifecycle do
   defp server_state(server_id) do
     case repo().get_clock(server_key(server_id)) do
       %{"state" => "deleted"} -> :deleted
+      {:error, _reason} = error -> error
+      _alive -> :alive
+    end
+  end
+
+  defp channel_state(channel_id) do
+    case repo().get_clock(channel_key(channel_id)) do
+      %{"state" => "deleted"} -> :channel_deleted
       {:error, _reason} = error -> error
       _alive -> :alive
     end

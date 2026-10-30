@@ -18,6 +18,7 @@ defmodule Notifications.Events.LifecycleTest do
   defp base(extra), do: Map.merge(%{event_id: "e1", occurred_at: @at}, extra)
 
   defp alive, do: expect(RepoMock, :get_clock, fn "server:s1" -> nil end)
+  defp channel_alive, do: expect(RepoMock, :get_clock, fn "channel:c1" -> nil end)
 
   describe "servers.channel_created" do
     test "stores the channel and asks the server's sockets to resync" do
@@ -239,6 +240,7 @@ defmodule Notifications.Events.LifecycleTest do
 
     test "records the activity and pushes it to the server's sockets" do
       alive()
+      channel_alive()
 
       expect(RepoMock, :record_message, fn attrs ->
         assert attrs == %{
@@ -273,8 +275,23 @@ defmodule Notifications.Events.LifecycleTest do
       assert Lifecycle.handle(message_event()) == {:ignored, :server_deleted}
     end
 
+    test "is ignored when the channel was already deleted" do
+      alive()
+      expect(RepoMock, :get_clock, fn "channel:c1" -> %{"state" => "deleted"} end)
+
+      assert Lifecycle.handle(message_event()) == {:ignored, :channel_deleted}
+    end
+
+    test "a failure reading the channel clock is returned" do
+      alive()
+      expect(RepoMock, :get_clock, fn "channel:c1" -> {:error, :timeout} end)
+
+      assert Lifecycle.handle(message_event()) == {:error, :timeout}
+    end
+
     test "a storage failure is returned so the event is retried" do
       alive()
+      channel_alive()
       expect(RepoMock, :record_message, fn _attrs -> {:error, :timeout} end)
 
       assert Lifecycle.handle(message_event()) == {:error, :timeout}
@@ -282,6 +299,7 @@ defmodule Notifications.Events.LifecycleTest do
 
     test "a push failure is returned so the event is retried" do
       alive()
+      channel_alive()
       expect(RepoMock, :record_message, fn _attrs -> :ok end)
       expect(PushMock, :publish, fn _topic, _event, _payload -> {:error, :not_connected} end)
 

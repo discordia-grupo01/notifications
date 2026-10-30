@@ -146,6 +146,57 @@ if rabbitmq_url && mongo_url do
       assert wait_until(fn -> flags(me, channel) == %{unread: true, mention: true} end)
     end
 
+    test "a channel nobody announced yet is learned from its first message (backfill case)",
+         ctx do
+      %{chan: chan, server: server, channel: channel, me: me, other: other} = ctx
+
+      publish(chan, "servers.role_updated", %{
+        "server_id" => server,
+        "role_id" => "everyone-" <> server,
+        "permissions" => ["VIEW_CHANNELS"],
+        "is_everyone" => true
+      })
+
+      publish(chan, "servers.member_roles_updated", %{
+        "server_id" => server,
+        "user_id" => me,
+        "role_ids" => ["everyone-" <> server]
+      })
+
+      publish(chan, "messaging.message_created", %{
+        "server_id" => server,
+        "channel_id" => channel,
+        "message_id" => later(10),
+        "author_id" => other,
+        "mentioned_user_ids" => []
+      })
+
+      assert wait_until(fn -> flags(me, channel) == %{unread: true, mention: false} end)
+    end
+
+    test "a message for a channel that was deleted does not bring it back", ctx do
+      %{chan: chan, server: server, channel: channel, other: other} = ctx
+
+      publish(chan, "servers.channel_deleted", %{"server_id" => server, "channel_id" => channel})
+
+      assert wait_until(fn ->
+               Notifications.Unread.Repo.Mongo.get_clock("channel:" <> channel) != nil
+             end)
+
+      publish(chan, "messaging.message_created", %{
+        "server_id" => server,
+        "channel_id" => channel,
+        "message_id" => later(10),
+        "author_id" => other,
+        "mentioned_user_ids" => []
+      })
+
+      Process.sleep(500)
+      assert Notifications.Unread.Repo.Mongo.get_channel(channel) == nil
+      assert {:ok, activity} = Notifications.Unread.Repo.Mongo.get_activity([channel])
+      assert activity == %{}
+    end
+
     test "reading the channel clears the indicators", ctx do
       %{chan: chan, server: server, channel: channel, me: me, other: other} = ctx
       seed_membership(ctx)
