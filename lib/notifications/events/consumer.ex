@@ -159,7 +159,7 @@ defmodule Notifications.Events.Consumer do
   defp discard_status(:invalid_payload), do: :discarded_invalid_payload
 
   defp connect(url, queue) do
-    with {:ok, conn} <- AMQP.Connection.open(url),
+    with {:ok, conn} <- Notifications.Events.Connection.open(url),
          {:ok, chan} <- AMQP.Channel.open(conn),
          :ok <- AMQP.Exchange.declare(chan, @exchange, :topic, durable: true),
          {:ok, _info} <- AMQP.Queue.declare(chan, queue, durable: true),
