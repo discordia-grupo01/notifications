@@ -12,6 +12,7 @@ defmodule NotificationsWeb.Router do
   scope "/", NotificationsWeb do
     pipe_through :api
 
+    get "/health", HealthController, :health
     get "/livez", HealthController, :livez
     get "/readyz", HealthController, :readyz
   end

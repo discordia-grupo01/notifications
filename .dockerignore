@@ -1,0 +1,10 @@
+_build
+deps
+cover
+.git
+.github
+.githooks
+.vscode
+.env
+test
+docker-compose.yml

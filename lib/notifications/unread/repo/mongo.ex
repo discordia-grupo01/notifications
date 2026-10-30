@@ -250,7 +250,8 @@ defmodule Notifications.Unread.Repo.Mongo do
         author_id: author_id,
         mentioned_user_ids: mentioned_user_ids
       }) do
-    with :ok <-
+    with :ok <- ensure_channel(channel_id, server_id),
+         :ok <-
            upsert(
              @activity,
              channel_id,
@@ -289,6 +290,15 @@ defmodule Notifications.Unread.Repo.Mongo do
         "$set" => %{"user_id" => user_id, "channel_id" => channel_id, "server_id" => server_id}
       }
     )
+  end
+
+  defp ensure_channel(channel_id, server_id) do
+    update = %{"$setOnInsert" => %{"server_id" => server_id, "kind" => "text"}}
+
+    case Mongo.update_one(@conn, @channels, %{"_id" => channel_id}, update, upsert: true) do
+      {:ok, _result} -> :ok
+      {:error, error} -> if duplicate_key?(error), do: :ok, else: {:error, error}
+    end
   end
 
   defp revive_member(key) do
