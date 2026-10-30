@@ -323,6 +323,95 @@ defmodule NotificationsWeb.NotificationsChannelTest do
     end
   end
 
+  describe "mark_all_read" do
+    setup %{world: world} do
+      stub(RepoMock, :mark_all_read, fn @me, entries ->
+        Agent.update(world, fn state ->
+          reads = Map.new(entries, &{&1.channel_id, &1.message_id})
+          %{state | reads: Map.merge(state.reads, reads)}
+        end)
+
+        :ok
+      end)
+
+      :ok
+    end
+
+    test "CA2: clears every unread indicator and replies with how many channels were cleared", %{
+      world: world
+    } do
+      put_world(world, :activity, %{@c1 => @m2, @c2 => @m3})
+      socket = join_own()
+      assert_push "snapshot", %{"servers" => [%{"channels" => [_a, _b]}]}
+
+      ref = push(socket, "mark_all_read", %{})
+
+      assert_reply ref, :ok, %{"channels" => 2}
+      assert_push "snapshot", %{"servers" => []}
+    end
+
+    test "CA2: mentions disappear too", %{world: world} do
+      put_world(world, :activity, %{@c1 => @m2})
+      stub(RepoMock, :get_mention_markers, fn @me, _ids -> {:ok, %{@c1 => @m2}} end)
+      socket = join_own()
+      assert_push "snapshot", %{"servers" => [%{"mention" => true}]}
+
+      ref = push(socket, "mark_all_read", %{})
+
+      assert_reply ref, :ok, %{"channels" => 1}
+      assert_push "snapshot", %{"servers" => []}
+    end
+
+    test "the user's other sessions are cleared as well", %{world: world} do
+      put_world(world, :activity, %{@c1 => @m2})
+      first = join_own()
+      assert_push "snapshot", %{"servers" => [_one]}
+      other = join_own()
+      assert_push "snapshot", %{"servers" => [_one]}
+
+      ref = push(first, "mark_all_read", %{})
+
+      assert_reply ref, :ok
+      assert_push "snapshot", %{"servers" => []}
+      assert_push "snapshot", %{"servers" => []}
+      assert Process.alive?(other.channel_pid)
+    end
+
+    test "with nothing unread it replies ok with zero", %{world: _world} do
+      socket = join_own()
+      assert_push "snapshot", %{"servers" => []}
+
+      ref = push(socket, "mark_all_read", %{})
+
+      assert_reply ref, :ok, %{"channels" => 0}
+    end
+
+    test "messages that arrive afterwards are unread again", %{world: world} do
+      put_world(world, :activity, %{@c1 => @m1})
+      socket = join_own()
+      assert_push "snapshot", _
+
+      ref = push(socket, "mark_all_read", %{})
+      assert_reply ref, :ok
+      assert_push "snapshot", %{"servers" => []}
+
+      message_created(@c1, @m2)
+
+      assert_push "unread_updated", %{"channel_id" => @c1, "unread" => true}
+    end
+
+    test "a storage failure is reported as unavailable", %{world: world} do
+      put_world(world, :activity, %{@c1 => @m2})
+      stub(RepoMock, :mark_all_read, fn _user, _entries -> {:error, :timeout} end)
+      socket = join_own()
+      assert_push "snapshot", _
+
+      ref = push(socket, "mark_all_read", %{})
+
+      assert_reply ref, :error, %{error: %{code: "UNREAD_UNAVAILABLE"}}
+    end
+  end
+
   describe "resync" do
     test "a resync broadcast reloads the snapshot", %{world: world} do
       join_own()

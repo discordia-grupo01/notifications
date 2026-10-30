@@ -1,6 +1,7 @@
 defmodule Notifications.Unread.Repo do
   @type result :: :ok | {:error, term()}
   @type write_result :: {:ok, :applied | :stale} | {:error, term()}
+  @type read_entry :: %{channel_id: String.t(), server_id: String.t(), message_id: String.t()}
   @type override :: %{role_id: String.t(), allow: [String.t()], deny: [String.t()]}
 
   @callback ping() :: :ok | {:error, term()}
@@ -50,6 +51,7 @@ defmodule Notifications.Unread.Repo do
               {:ok, %{String.t() => String.t()}} | {:error, term()}
   @callback get_mention_markers(String.t(), [String.t()]) ::
               {:ok, %{String.t() => String.t()}} | {:error, term()}
+  @callback mark_all_read(user_id :: String.t(), [read_entry()]) :: result()
   @callback mark_read(user_id :: String.t(), String.t(), String.t(), message_id :: String.t()) ::
               result()
 

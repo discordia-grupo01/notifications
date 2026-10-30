@@ -13,7 +13,9 @@ defmodule Notifications.UnreadTest do
   @m2 "00000000-0000-7000-8000-000000000002"
   @m3 "00000000-0000-7000-8000-000000000003"
 
-  defp stub_visible(channels \\ ["c1"]) do
+  defp stub_visible(channels \\ ["c1"], opts \\ []) do
+    joined = Keyword.get(opts, :joined, ~U[1970-01-01 00:00:00Z])
+
     stub(RepoMock, :list_memberships, fn @me ->
       {:ok,
        [
@@ -21,7 +23,7 @@ defmodule Notifications.UnreadTest do
            "server_id" => @s1,
            "user_id" => @me,
            "role_ids" => ["everyone"],
-           "joined_at" => ~U[1970-01-01 00:00:00Z]
+           "joined_at" => joined
          }
        ]}
     end)
@@ -171,6 +173,85 @@ defmodule Notifications.UnreadTest do
       expect(RepoMock, :get_channel, fn "c1" -> {:error, :timeout} end)
 
       assert Unread.mark_read(@me, "c1") == {:error, :timeout}
+    end
+  end
+
+  describe "mark_all_read/1" do
+    test "CA2: marks every channel with unread content up to its last message" do
+      stub_visible(["c1", "c2", "c3"])
+
+      expect(RepoMock, :get_activity, fn ["c1", "c2", "c3"] ->
+        {:ok, %{"c1" => @m3, "c2" => @m2, "c3" => @m1}}
+      end)
+
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{"c2" => @m2, "c3" => @m1}} end)
+
+      expect(RepoMock, :mark_all_read, fn @me, entries ->
+        assert entries == [%{channel_id: "c1", server_id: @s1, message_id: @m3}]
+        :ok
+      end)
+
+      assert Unread.mark_all_read(@me) == {:ok, 1}
+    end
+
+    test "covers channels of every server and every kind of unread" do
+      stub_visible(["c1", "c2"])
+      expect(RepoMock, :get_activity, fn _ids -> {:ok, %{"c1" => @m2, "c2" => @m3}} end)
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{"c1" => @m1}} end)
+
+      expect(RepoMock, :mark_all_read, fn @me, entries ->
+        assert Enum.sort_by(entries, & &1.channel_id) == [
+                 %{channel_id: "c1", server_id: @s1, message_id: @m2},
+                 %{channel_id: "c2", server_id: @s1, message_id: @m3}
+               ]
+
+        :ok
+      end)
+
+      assert Unread.mark_all_read(@me) == {:ok, 2}
+    end
+
+    test "does not write anything when nothing is unread" do
+      stub_visible(["c1"])
+      expect(RepoMock, :get_activity, fn _ids -> {:ok, %{"c1" => @m2}} end)
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{"c1" => @m3}} end)
+
+      assert Unread.mark_all_read(@me) == {:ok, 0}
+    end
+
+    test "messages from before the member joined are not touched" do
+      stub_visible(["c1"], joined: ~U[2026-10-01 00:00:00Z])
+      expect(RepoMock, :get_activity, fn _ids -> {:ok, %{"c1" => @m3}} end)
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{}} end)
+
+      assert Unread.mark_all_read(@me) == {:ok, 0}
+    end
+
+    test "a user without channels has nothing to mark" do
+      stub(RepoMock, :list_memberships, fn @me -> {:ok, []} end)
+      stub(RepoMock, :get_server_owners, fn [] -> {:ok, %{}} end)
+      stub(RepoMock, :list_roles, fn [] -> {:ok, []} end)
+      stub(RepoMock, :list_channels, fn [] -> {:ok, []} end)
+      stub(RepoMock, :list_overrides, fn [] -> {:ok, []} end)
+      stub(RepoMock, :get_activity, fn [] -> {:ok, %{}} end)
+      stub(RepoMock, :get_read_markers, fn @me, [] -> {:ok, %{}} end)
+
+      assert Unread.mark_all_read(@me) == {:ok, 0}
+    end
+
+    test "propagates a storage failure when reading or writing" do
+      stub_visible(["c1"])
+      expect(RepoMock, :get_activity, fn _ids -> {:ok, %{"c1" => @m2}} end)
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{}} end)
+      expect(RepoMock, :mark_all_read, fn @me, _entries -> {:error, :timeout} end)
+
+      assert Unread.mark_all_read(@me) == {:error, :timeout}
+    end
+
+    test "propagates a failure while reading the replica" do
+      expect(RepoMock, :list_memberships, fn @me -> {:error, :timeout} end)
+
+      assert Unread.mark_all_read(@me) == {:error, :timeout}
     end
   end
 

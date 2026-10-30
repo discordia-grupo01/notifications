@@ -197,6 +197,40 @@ if rabbitmq_url && mongo_url do
       assert activity == %{}
     end
 
+    test "CA2: marking everything as read clears every channel of every server", ctx do
+      %{chan: chan, server: server, channel: channel, me: me, other: other} = ctx
+      seed_membership(ctx)
+      second = "chan2-" <> server
+
+      publish(chan, "servers.channel_created", %{
+        "server_id" => server,
+        "channel_id" => second,
+        "name" => "random",
+        "kind" => "text"
+      })
+
+      for {id, mentions} <- [{channel, [me]}, {second, []}] do
+        publish(chan, "messaging.message_created", %{
+          "server_id" => server,
+          "channel_id" => id,
+          "message_id" => later(10),
+          "author_id" => other,
+          "mentioned_user_ids" => mentions
+        })
+      end
+
+      assert wait_until(fn ->
+               flags(me, channel) == %{unread: true, mention: true} and
+                 flags(me, second) == %{unread: true, mention: false}
+             end)
+
+      assert {:ok, 2} = Unread.mark_all_read(me)
+
+      assert flags(me, channel) == %{unread: false, mention: false}
+      assert flags(me, second) == %{unread: false, mention: false}
+      assert {:ok, 0} = Unread.mark_all_read(me)
+    end
+
     test "reading the channel clears the indicators", ctx do
       %{chan: chan, server: server, channel: channel, me: me, other: other} = ctx
       seed_membership(ctx)
