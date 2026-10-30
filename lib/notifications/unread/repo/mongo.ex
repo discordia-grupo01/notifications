@@ -281,6 +281,20 @@ defmodule Notifications.Unread.Repo.Mongo do
     do: markers(@mention_markers, "last_mention_id", user_id, channel_ids)
 
   @impl true
+  def mark_all_read(user_id, entries) do
+    operations =
+      Enum.map(entries, fn %{channel_id: channel_id, server_id: server_id, message_id: id} ->
+        {marker_key(user_id, channel_id),
+         %{
+           "$max" => %{"last_read_id" => id},
+           "$set" => %{"user_id" => user_id, "channel_id" => channel_id, "server_id" => server_id}
+         }}
+      end)
+
+    upsert_many(@read_markers, operations)
+  end
+
+  @impl true
   def mark_read(user_id, channel_id, server_id, message_id) do
     upsert(
       @read_markers,
@@ -316,21 +330,28 @@ defmodule Notifications.Unread.Repo.Mongo do
   defp record_mentions([], _channel_id, _server_id, _message_id), do: :ok
 
   defp record_mentions(user_ids, channel_id, server_id, message_id) do
+    operations =
+      Enum.map(user_ids, fn user_id ->
+        {marker_key(user_id, channel_id),
+         %{
+           "$max" => %{"last_mention_id" => message_id},
+           "$set" => %{
+             "user_id" => user_id,
+             "channel_id" => channel_id,
+             "server_id" => server_id
+           }
+         }}
+      end)
+
+    upsert_many(@mention_markers, operations)
+  end
+
+  defp upsert_many(_collection, []), do: :ok
+
+  defp upsert_many(collection, operations) do
     bulk =
-      Enum.reduce(user_ids, Mongo.UnorderedBulk.new(@mention_markers), fn user_id, bulk ->
-        Mongo.UnorderedBulk.update_one(
-          bulk,
-          %{"_id" => marker_key(user_id, channel_id)},
-          %{
-            "$max" => %{"last_mention_id" => message_id},
-            "$set" => %{
-              "user_id" => user_id,
-              "channel_id" => channel_id,
-              "server_id" => server_id
-            }
-          },
-          upsert: true
-        )
+      Enum.reduce(operations, Mongo.UnorderedBulk.new(collection), fn {id, update}, bulk ->
+        Mongo.UnorderedBulk.update_one(bulk, %{"_id" => id}, update, upsert: true)
       end)
 
     case Mongo.BulkWrite.write(@conn, bulk) do

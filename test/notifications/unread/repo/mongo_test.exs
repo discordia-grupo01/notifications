@@ -181,6 +181,46 @@ if mongo_url do
         assert id == message_id(5)
       end
 
+      test "mark_all_read writes a marker per channel in one go", %{server: s, user: u} do
+        entries =
+          for n <- 1..5, do: %{channel_id: "c#{n}-#{u}", server_id: s, message_id: message_id(n)}
+
+        assert Repo.mark_all_read(u, entries) == :ok
+
+        ids = Enum.map(entries, & &1.channel_id)
+        assert {:ok, markers} = Repo.get_read_markers(u, ids)
+        assert map_size(markers) == 5
+        assert markers["c3-#{u}"] == message_id(3)
+      end
+
+      test "mark_all_read never moves a marker backwards and is repeatable", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        Repo.mark_read(u, c, s, message_id(9))
+
+        assert Repo.mark_all_read(u, [%{channel_id: c, server_id: s, message_id: message_id(4)}]) ==
+                 :ok
+
+        assert Repo.mark_all_read(u, [%{channel_id: c, server_id: s, message_id: message_id(4)}]) ==
+                 :ok
+
+        assert {:ok, %{^c => id}} = Repo.get_read_markers(u, [c])
+        assert id == message_id(9)
+      end
+
+      test "mark_all_read leaves other users alone", %{server: s, channel: c, user: u} do
+        Repo.mark_all_read(u, [%{channel_id: c, server_id: s, message_id: message_id(4)}])
+
+        assert {:ok, markers} = Repo.get_read_markers("someone-else", [c])
+        assert markers == %{}
+      end
+
+      test "mark_all_read with nothing to write is a no-op", %{user: u} do
+        assert Repo.mark_all_read(u, []) == :ok
+      end
+
       test "queries with no channels are empty" do
         assert Repo.get_activity([]) == {:ok, %{}}
         assert Repo.get_read_markers("u", []) == {:ok, %{}}
