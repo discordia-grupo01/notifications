@@ -63,7 +63,7 @@ en la URL lo deja en logs (ADR 0002). Por eso el cliente pide un ticket de un so
 
 ## Endpoints / Channels
 
-- `GET /livez`, `GET /readyz` (readiness pinguea Mongo)
+- `GET /health` (ping: responde `{"status":"ok"}` sin tocar Mongo ni el broker), `GET /livez` (igual, en texto plano), `GET /readyz` (readiness pinguea Mongo)
 - `POST /v1/notifications/socket-tickets` -- ticket para el WebSocket (Bearer JWT, validado
   por Kong)
 - WS `/notifications/socket?ticket=<ticket>`, canal `notifications:<user_id>` (solo se puede
@@ -202,6 +202,45 @@ Ver `.env.example`.
 
 JSON, una línea por evento, con `service`, `request_id` y los ids relevantes. Nunca se
 registra el query string (lleva el ticket) ni contenido de mensajes.
+
+## Deploy (Render + Atlas)
+
+La imagen es el `Dockerfile` del repo (release de Elixir, usuario sin privilegios, ~17 MB) y
+`render.yaml` es el blueprint de Render. **No usa Supabase**: `notifications` no tiene outbox
+ni Postgres, solo Mongo y RabbitMQ.
+
+1. **Atlas (Mongo).** Creá un usuario con rol `readWrite` sobre la base `notifications` y
+   habilitá en *Network Access* las IPs de salida de Render (están en el dashboard del
+   servicio; para probar se puede abrir `0.0.0.0/0`). La URL lleva el nombre de la base:
+   `mongodb+srv://USUARIO:CLAVE@cluster0.xxxxx.mongodb.net/notifications?retryWrites=true&w=majority`
+   (si la clave tiene caracteres especiales, codificarla como URL). Con `mongodb+srv://` el
+   servicio activa TLS verificado solo. Los índices se crean al arrancar.
+2. **RabbitMQ (CloudAMQP).** `RABBITMQ_URL=amqps://USUARIO:CLAVE@host.rmq.cloudamqp.com/VHOST`.
+   Con `amqps://` el servicio verifica el certificado del broker. Usa **una sola conexión**
+   (el plan gratuito permite 20 y ya las comparten `servers`, `identity` y `messaging`).
+3. **Render.** *New > Blueprint*, elegí el repo y completá `MONGO_URL` y `RABBITMQ_URL`
+   (`SECRET_KEY_BASE` se genera solo). Render despliega cuando pasa el CI
+   (`autoDeployTrigger: checksPass`) y usa `/health` como health check. Es una sola instancia.
+   El plan es `free`, que se duerme a los 15 minutos sin tráfico entrante; para que no se
+   duerma, en cron-job.org se programa un `GET https://<servicio>.onrender.com/health` cada
+   10 minutos (timeout de 60 s: el primer ping tras una caída tarda ~1 minuto en despertarlo).
+   `/health` no toca Mongo, así que el ping no mantiene despierto a Atlas ni gasta conexiones.
+   Una instancia siempre encendida consume ~744 de las 750 horas gratuitas del mes de todo el
+   workspace de Render: no puede haber otro servicio gratuito en el mismo workspace.
+   Mientras el servicio duerme, los eventos esperan en la cola durable de RabbitMQ y se procesan
+   al despertar; si hace falta un servicio sin esas pausas, se pasa a `plan: starter`.
+4. **Gateway.** En el `.env` de la VM del gateway, `NOTIFICATIONS_UPSTREAM_URL=https://<servicio>.onrender.com`,
+   y recrear Kong: `docker compose up -d --force-recreate kong-config gateway`.
+5. **Comprobar.** `GET https://<servicio>.onrender.com/readyz` responde 200, y los logs muestran
+   `events_consumer_connected` e `indexes_ready`.
+
+**Primer arranque con datos existentes.** RabbitMQ no guarda lo publicado antes de que exista la
+cola, así que la réplica de permisos arranca vacía. Hay que desplegar `notifications` y después
+repetir el backfill de `servers` (migración `0022_backfill_access_events`, re-publica roles,
+miembros, overrides y dueño; se puede repetir sin riesgo). Los canales no hacen falta en el
+backfill: un canal desconocido se da de alta con su primer mensaje (siempre es de texto), salvo
+que ya figure borrado. Lo que se escribió antes del deploy no cuenta como no leído: la línea
+base de cada miembro es el momento en que el servicio lo vio.
 
 ## Setup local
 ```bash
