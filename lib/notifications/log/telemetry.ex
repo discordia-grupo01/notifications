@@ -3,7 +3,7 @@ defmodule Notifications.Log.Telemetry do
 
   alias Notifications.Log
 
-  @quiet_routes ["/livez", "/readyz"]
+  @quiet_routes ["/health", "/livez", "/readyz"]
   @handler_id "notifications-structured-logs"
   @events [
     [:phoenix, :endpoint, :stop],

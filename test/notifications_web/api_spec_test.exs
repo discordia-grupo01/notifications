@@ -5,6 +5,7 @@ defmodule NotificationsWeb.ApiSpecTest do
     spec = NotificationsWeb.ApiSpec.spec()
 
     assert %OpenApiSpex.OpenApi{} = spec
+    assert Map.has_key?(spec.paths, "/health")
     assert Map.has_key?(spec.paths, "/livez")
     assert Map.has_key?(spec.paths, "/readyz")
 

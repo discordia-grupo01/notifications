@@ -4,6 +4,22 @@ defmodule NotificationsWeb.HealthController do
 
   tags ["ops"]
 
+  operation :health,
+    summary:
+      "Ping -- responde 200 sin tocar Mongo ni el broker; sirve para mantener despierto el servicio y para monitores externos",
+    responses: [
+      ok:
+        {"ok", "application/json",
+         %OpenApiSpex.Schema{
+           type: :object,
+           properties: %{status: %OpenApiSpex.Schema{type: :string, example: "ok"}}
+         }}
+    ]
+
+  def health(conn, _params) do
+    json(conn, %{status: "ok"})
+  end
+
   operation :livez,
     summary: "Liveness -- confirma que el proceso responde, sin tocar Mongo ni el broker",
     responses: [ok: {"ok", "text/plain", %OpenApiSpex.Schema{type: :string}}]

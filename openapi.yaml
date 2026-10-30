@@ -56,6 +56,29 @@ info:
   version: 0.1.0
 openapi: 3.0.0
 paths:
+  /health:
+    get:
+      callbacks: {}
+      operationId: NotificationsWeb.HealthController.health
+      parameters: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                properties:
+                  status:
+                    example: ok
+                    type: string
+                    x-struct:
+                    x-validate:
+                type: object
+                x-struct:
+                x-validate:
+          description: ok
+      summary: Ping -- responde 200 sin tocar Mongo ni el broker; sirve para mantener despierto el servicio y para monitores externos
+      tags:
+        - ops
   /livez:
     get:
       callbacks: {}

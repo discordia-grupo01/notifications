@@ -81,7 +81,7 @@ defmodule Notifications.Log.TelemetryTest do
     end
 
     test "health checks are debug, so they do not flood the info level" do
-      for route <- ["/livez", "/readyz"] do
+      for route <- ["/health", "/livez", "/readyz"] do
         [entry] = entries(fn -> stop(conn(:get, route, 200)) end)
         assert entry["level"] == "debug"
         assert entry["route"] == route
@@ -91,7 +91,7 @@ defmodule Notifications.Log.TelemetryTest do
     test "nothing is written for health checks when the level is info" do
       Logger.configure(level: :info)
 
-      assert capture_log(fn -> stop(conn(:get, "/livez", 200)) end) == ""
+      assert capture_log(fn -> stop(conn(:get, "/health", 200)) end) == ""
     end
 
     test "an unauthenticated request has no user_id" do

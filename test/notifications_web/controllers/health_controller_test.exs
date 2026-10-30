@@ -4,6 +4,11 @@ defmodule NotificationsWeb.HealthControllerTest do
 
   setup :verify_on_exit!
 
+  test "GET /health answers 200 with a JSON body and never touches Mongo", %{conn: conn} do
+    conn = get(conn, "/health")
+    assert json_response(conn, 200) == %{"status" => "ok"}
+  end
+
   test "GET /livez never touches Mongo and always answers 200", %{conn: conn} do
     conn = get(conn, "/livez")
     assert conn.status == 200
