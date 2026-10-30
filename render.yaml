@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: discordia-notifications
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: SECRET_KEY_BASE
+        generateValue: true
+      - key: MONGO_URL
+        sync: false
+      - key: RABBITMQ_URL
+        sync: false
+      - key: MONGO_POOL_SIZE
+        value: "10"
+      - key: LOG_LEVEL
+        value: info
+      - key: CHECK_ORIGIN
+        value: https://discordia-g1.vercel.app,https://discordia-g1.duckdns.org
