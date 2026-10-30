@@ -111,6 +111,7 @@ Eventos que manda el cliente:
 | Evento | Payload | Respuesta |
 |---|---|---|
 | `mark_read` | `{"channel_id": "…", "message_id": "…"}` (`message_id` es opcional: sin él se lee hasta el último mensaje) | `ok`, o error `FORBIDDEN` / `CHANNEL_NOT_FOUND` / `UNREAD_UNAVAILABLE` |
+| `mark_all_read` | `{}` | `{"channels": N}` con cuántos canales se limpiaron, o error `UNREAD_UNAVAILABLE`; después llega un `snapshot` (vacío) a todas las sesiones del usuario |
 | `snapshot` | `{}` | `ok` y un nuevo `snapshot` |
 
 `mark_read` nunca retrocede un marcador. Acepta el `message_id` que mande el cliente aunque el
@@ -119,6 +120,19 @@ evento de ese mensaje todavía no haya llegado por RabbitMQ (el cliente lo ve en
 canal se encendería como no leído justo después de leerlo). Tiene que ser un UUIDv7 y no estar
 más de 60 s en el futuro; si no, responde `INVALID_PAYLOAD`.
 Se avisa a las otras sesiones del mismo usuario para que apaguen el indicador también.
+
+### Marcar como leído
+
+- **Al abrir un canal.** El cliente manda `mark_read` cuando el usuario abre el canal y ve los
+  mensajes nuevos, con el `message_id` del último mensaje que mostró (así no importa si el evento
+  de ese mensaje todavía no llegó). El indicador del canal, su mención y, si era el último
+  pendiente, el del servidor se apagan y llega `unread_updated`.
+- **Marcar todo.** `mark_all_read` pone, para cada canal que el usuario puede ver y tiene algo sin
+  leer, el marcador en el último mensaje del canal, con una sola escritura en bloque. Solo toca
+  canales con contenido sin leer, así que repetirlo no escribe nada (`{"channels": 0}`). Después
+  publica un `resync` a todas las sesiones del usuario, que reciben un `snapshot` ya vacío.
+  Lo que se escriba después vuelve a contar como no leído. No existe una versión "por servidor":
+  el cliente puede mandar un `mark_read` por cada canal si lo necesita.
 
 Ejemplo (frames Phoenix v2, `[join_ref, ref, topic, event, payload]`):
 
@@ -301,7 +315,7 @@ Phoenix organiza el codigo por **Context** (dominio de negocio), no por capa tec
 lib/
 ├── notifications/
 │   ├── application.ex            # Supervisor: Mongo, PubSub, consumidores, endpoint
-│   ├── unread.ex                 # API publica: snapshot/1 y mark_read/3
+│   ├── unread.ex                 # API publica: snapshot/1, mark_read/3 y mark_all_read/1
 │   ├── unread/
 │   │   ├── state.ex              # Calculo puro de los indicadores
 │   │   ├── access.ex             # Que canales ve cada usuario
