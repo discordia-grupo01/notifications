@@ -1,5 +1,6 @@
 defmodule Notifications.Unread do
   alias Notifications.UUID
+  alias Notifications.Mutes
   alias Notifications.Unread.{Access, Repo, State}
 
   @uuid_v7 ~r/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -16,8 +17,9 @@ defmodule Notifications.Unread do
          channel_ids = Enum.map(visible, & &1.channel_id),
          {:ok, activity} <- repo.get_activity(channel_ids),
          {:ok, reads} <- repo.get_read_markers(user_id, channel_ids),
-         {:ok, mentions} <- repo.get_mention_markers(user_id, channel_ids) do
-      {:ok, State.build(visible, activity, reads, mentions)}
+         {:ok, mentions} <- repo.get_mention_markers(user_id, channel_ids),
+         {:ok, mutes} <- Mutes.scopes(user_id) do
+      {:ok, visible |> State.build(activity, reads, mentions) |> State.apply_mutes(mutes)}
     end
   end
 
@@ -28,8 +30,7 @@ defmodule Notifications.Unread do
     repo = Repo.impl()
 
     with {:ok, requested} <- validate_message_id(message_id),
-         {:ok, server_id} <- fetch_text_channel(repo, channel_id),
-         :ok <- ensure_visible(user_id, channel_id),
+         {:ok, server_id} <- Access.authorize_channel(user_id, channel_id),
          {:ok, up_to} <- resolve(repo, channel_id, requested) do
       persist(repo, user_id, channel_id, server_id, up_to)
     end
@@ -87,21 +88,4 @@ defmodule Notifications.Unread do
 
   defp future_limit,
     do: DateTime.utc_now() |> DateTime.add(@max_future_seconds, :second) |> UUID.floor_v7()
-
-  defp fetch_text_channel(repo, channel_id) do
-    case repo.get_channel(channel_id) do
-      %{"kind" => "text", "server_id" => server_id} -> {:ok, server_id}
-      nil -> {:error, :channel_not_found}
-      %{} -> {:error, :channel_not_found}
-      {:error, _reason} = error -> error
-    end
-  end
-
-  defp ensure_visible(user_id, channel_id) do
-    with {:ok, visible} <- Access.visible_channels(user_id) do
-      if Enum.any?(visible, &(&1.channel_id == channel_id)),
-        do: :ok,
-        else: {:error, :forbidden}
-    end
-  end
 end

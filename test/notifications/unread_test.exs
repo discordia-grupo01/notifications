@@ -47,6 +47,7 @@ defmodule Notifications.UnreadTest do
     end)
 
     stub(RepoMock, :list_overrides, fn _ids -> {:ok, []} end)
+    stub(RepoMock, :list_mutes, fn @me -> {:ok, []} end)
   end
 
   describe "snapshot/1" do
@@ -64,10 +65,69 @@ defmodule Notifications.UnreadTest do
                    "server_id" => @s1,
                    "unread" => true,
                    "mention" => true,
-                   "channels" => [%{"channel_id" => "c1", "unread" => true, "mention" => true}]
+                   "muted" => false,
+                   "channels" => [
+                     %{
+                       "channel_id" => "c1",
+                       "unread" => true,
+                       "mention" => true,
+                       "muted" => false
+                     }
+                   ]
                  }
-               ]
+               ],
+               "muted" => %{"servers" => [], "channels" => []}
              }
+    end
+
+    test "CA1: a muted channel stays unread but its mention is not highlighted" do
+      stub_visible(["c1", "c2"])
+
+      stub(RepoMock, :list_mutes, fn @me ->
+        {:ok, [%{"scope" => "channel", "scope_id" => "c1", "server_id" => @s1}]}
+      end)
+
+      expect(RepoMock, :get_activity, fn _ids -> {:ok, %{"c1" => @m3, "c2" => @m3}} end)
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{}} end)
+
+      expect(RepoMock, :get_mention_markers, fn @me, _ids ->
+        {:ok, %{"c1" => @m3, "c2" => @m3}}
+      end)
+
+      assert {:ok, state} = Unread.snapshot(@me)
+
+      assert Notifications.Unread.State.channel_flags(state, "c1") ==
+               %{unread: true, mention: false, muted: true}
+
+      assert Notifications.Unread.State.channel_flags(state, "c2") ==
+               %{unread: true, mention: true, muted: false}
+    end
+
+    test "CA2: a muted server mutes all of its channels" do
+      stub_visible(["c1", "c2"])
+
+      stub(RepoMock, :list_mutes, fn @me ->
+        {:ok, [%{"scope" => "server", "scope_id" => @s1, "server_id" => @s1}]}
+      end)
+
+      expect(RepoMock, :get_activity, fn _ids -> {:ok, %{"c1" => @m3, "c2" => @m3}} end)
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{}} end)
+      expect(RepoMock, :get_mention_markers, fn @me, _ids -> {:ok, %{"c1" => @m3}} end)
+
+      assert {:ok, state} = Unread.snapshot(@me)
+
+      assert Notifications.Unread.State.server_flags(state, @s1) ==
+               %{unread: true, mention: false, muted: true}
+    end
+
+    test "propagates a failure reading the mutes" do
+      stub_visible()
+      expect(RepoMock, :get_activity, fn _ids -> {:ok, %{}} end)
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{}} end)
+      expect(RepoMock, :get_mention_markers, fn @me, _ids -> {:ok, %{}} end)
+      stub(RepoMock, :list_mutes, fn @me -> {:error, :timeout} end)
+
+      assert Unread.snapshot(@me) == {:error, :timeout}
     end
 
     test "a user without memberships gets an empty state" do
@@ -79,6 +139,7 @@ defmodule Notifications.UnreadTest do
       stub(RepoMock, :get_activity, fn [] -> {:ok, %{}} end)
       stub(RepoMock, :get_read_markers, fn @me, [] -> {:ok, %{}} end)
       stub(RepoMock, :get_mention_markers, fn @me, [] -> {:ok, %{}} end)
+      stub(RepoMock, :list_mutes, fn @me -> {:ok, []} end)
 
       assert {:ok, %{}} = Unread.snapshot(@me)
     end
