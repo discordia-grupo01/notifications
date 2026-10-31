@@ -21,5 +21,9 @@ defmodule NotificationsWeb.Router do
     pipe_through [:api, :authenticated]
 
     post "/socket-tickets", SocketTicketController, :create
+
+    get "/settings", SettingsController, :index
+    put "/settings/servers/:server_id", SettingsController, :update_server
+    put "/settings/channels/:channel_id", SettingsController, :update_channel
   end
 end

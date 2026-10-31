@@ -12,8 +12,8 @@ defmodule NotificationsWeb.ApiSpec do
         description:
           "Indicadores de no leído por canal y por servidor. Todo el estado viaja por WebSocket " <>
             "(canal `notifications:<user_id>` en `/notifications/socket`): al unirse se recibe el " <>
-            "estado completo y después los cambios en vivo. Lo único que se pide por REST es el " <>
-            "ticket para abrir ese socket.",
+            "estado completo y después los cambios en vivo. Por REST se pide el ticket para abrir " <>
+            "ese socket y se administran los silenciados de canales y servidores.",
         version: "0.1.0"
       },
       paths: Paths.from_router(NotificationsWeb.Router)
