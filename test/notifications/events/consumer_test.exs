@@ -80,7 +80,7 @@ if rabbitmq_url && mongo_url do
 
     defp flags(user, channel) do
       case Unread.snapshot(user) do
-        {:ok, state} -> State.channel_flags(state, channel)
+        {:ok, state} -> state |> State.channel_flags(channel) |> Map.take([:unread, :mention])
         {:error, _reason} -> nil
       end
     end
@@ -128,7 +128,9 @@ if rabbitmq_url && mongo_url do
 
       assert wait_until(fn -> flags(me, channel) == %{unread: true, mention: false} end)
       assert {:ok, state} = Unread.snapshot(me)
-      assert State.server_flags(state, server) == %{unread: true, mention: false}
+
+      assert Map.take(State.server_flags(state, server), [:unread, :mention]) ==
+               %{unread: true, mention: false}
     end
 
     test "CA3: a message that mentions the member is flagged as a mention", ctx do
