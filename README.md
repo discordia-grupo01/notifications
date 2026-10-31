@@ -1,16 +1,18 @@
 # notifications (Elixir)
 
-Servicio de **notificaciones** de Discordia. Cubre dos historias:
+Servicio de **notificaciones** de Discordia. Cubre tres historias:
 
 - **"Ver notificaciones no leídas"**: CA1 indicador de no leído por canal, CA2 indicador de no
   leído por servidor (si al menos un canal tiene no leídos) y CA3 indicador destacado para las
   menciones (historia optativa, ya implementada del lado de `messaging` en #46).
 - **"Silenciar notificaciones de un canal o servidor"** (HU #64): ver "Silenciar un canal o un
   servidor".
+- **"Configurar preferencias de notificación"** (HU #65): ver "Preferencias de notificación".
 
 El servicio **no llama a ningún otro servicio por HTTP**: todo lo que sabe lo aprende
 consumiendo eventos del bus. Lo que expone por REST es el ticket para abrir el WebSocket (ver
-"Por qué hay un endpoint HTTP") y la configuración del propio usuario (silenciados).
+"Por qué hay un endpoint HTTP") y la configuración del propio usuario (silenciados y
+preferencias).
 
 ## Stack
 - Lenguaje: Elixir / Phoenix (Channels para WS)
@@ -71,10 +73,12 @@ se guardan acá y se piden por REST.
 - `GET /health` (ping: responde `{"status":"ok"}` sin tocar Mongo ni el broker), `GET /livez` (igual, en texto plano), `GET /readyz` (readiness pinguea Mongo)
 - `POST /v1/notifications/socket-tickets` -- ticket para el WebSocket (Bearer JWT, validado
   por Kong)
-- `GET /v1/notifications/settings` -- qué servidores y canales silenció el usuario
+- `GET /v1/notifications/settings` -- qué servidores y canales silenció el usuario y qué
+  preferencias de nivel fijó
 - `PUT /v1/notifications/settings/servers/:server_id` y
   `PUT /v1/notifications/settings/channels/:channel_id` -- silenciar o reactivar
-  (`{"muted": true | false}`)
+  (`{"muted": true | false}`) y/o elegir el nivel de aviso
+  (`{"level": "all" | "mentions" | "none" | null}`)
 - WS `/notifications/socket?ticket=<ticket>`, canal `notifications:<user_id>` (solo se puede
   unir uno a su propio topic)
 
@@ -92,18 +96,25 @@ Al unirse el servidor empuja `snapshot` con el estado completo; después va empu
       "server_id": "…",
       "unread": true,
       "mention": false,
+      "notify": false,
       "muted": false,
       "channels": [
-        { "channel_id": "…", "unread": true, "mention": false, "muted": false }
+        { "channel_id": "…", "unread": true, "mention": false, "notify": false, "muted": false }
       ]
     }
   ],
-  "muted": { "servers": ["…"], "channels": ["…"] }
+  "muted": { "servers": ["…"], "channels": ["…"] },
+  "preferences": { "servers": { "<server_id>": "all" }, "channels": { "<channel_id>": "none" } }
 }
 ```
 
-`muted` (arriba de todo) lista lo que el usuario silenció explícitamente, aunque no tenga nada sin
-leer: sirve para dibujar el estado de cada canal y servidor sin pedir nada más.
+`muted` y `preferences` (arriba de todo) listan lo que el usuario configuró explícitamente, aunque
+no tenga nada sin leer: sirven para dibujar el estado de cada canal y servidor sin pedir nada más.
+`preferences` trae solo lo guardado; lo heredado o por defecto no aparece.
+
+`notify` es el aviso destacado: lo que decide si hay que mostrar o enviar una notificación. `unread`
+es solo "hay algo sin leer" y no depende de ninguna configuración. `mention` indica que hay una
+mención pendiente que sigue contando como destacada.
 
 `unread_updated` -- cambió el estado de un canal (y de su servidor):
 
@@ -113,8 +124,9 @@ leer: sirve para dibujar el estado de cada canal y servidor sin pedir nada más.
   "channel_id": "…",
   "unread": true,
   "mention": true,
+  "notify": true,
   "muted": false,
-  "server": { "unread": true, "mention": true, "muted": false }
+  "server": { "unread": true, "mention": true, "notify": true, "muted": false }
 }
 ```
 
@@ -158,8 +170,8 @@ Ejemplo (frames Phoenix v2, `[join_ref, ref, topic, event, payload]`):
 
 ### Silenciar un canal o un servidor
 
-Silenciar apaga **solo el aviso destacado** (`mention`); la actividad sigue contando como no
-leída (`unread`). Sale de dos silenciados posibles y se combinan con un "o":
+Silenciar apaga **solo el aviso destacado** (`mention` y `notify`); la actividad sigue contando
+como no leída (`unread`). Sale de dos silenciados posibles y se combinan con un "o":
 
 | Silenciado | Efecto |
 |---|---|
@@ -186,6 +198,44 @@ PUT /v1/notifications/settings/channels/<channel_id>
 
 200 { "channel_id": "…", "muted": true }
 ```
+
+### Preferencias de notificación
+
+Cada usuario puede elegir **qué actividad avisa** de forma destacada (`notify`), por servidor y por
+canal. Hay tres niveles:
+
+| Nivel | Qué avisa |
+|---|---|
+| `all` | Todos los mensajes. |
+| `mentions` | Solo las menciones. Es el comportamiento por defecto. |
+| `none` | Nada, ni siquiera las menciones. |
+
+- **Reglas de prioridad (la más específica gana):** el nivel del canal, si lo hay; si no, el del
+  servidor; si no, el por defecto (`mentions`). Un canal con `all` dentro de un servidor en `none`
+  avisa; un canal en `none` dentro de un servidor en `all`, no.
+- **Silenciar gana siempre**: un canal o servidor silenciado vale como `none` aunque tenga un nivel
+  más permisivo configurado.
+- **`unread` no cambia nunca.** Elegir `none` (como silenciar) deja el canal sin leer; solo cambia
+  `notify` y `mention`.
+- **`mention` y `notify`**: con `mentions` van juntos. Con `all`, un mensaje común enciende `notify`
+  pero no `mention` (no hay una mención). Con `none`, ninguno de los dos.
+- `{"level": null}` borra la preferencia: un canal vuelve a heredar la del servidor y un servidor
+  vuelve al valor por defecto. Si el documento queda sin silenciado ni nivel, se borra.
+- El mismo `PUT` acepta `muted`, `level` o ambos y solo cambia lo que se manda. Hace falta al menos
+  uno (`400 INVALID_PAYLOAD`; también si `level` no es `all`/`mentions`/`none`/`null`).
+- Para fijar algo hay que poder ver el canal o ser miembro del servidor. Borrar (`level: null`) o
+  reactivar (`muted: false`) no pide nada.
+- Igual que al silenciar, las sesiones abiertas del usuario reciben un `snapshot` nuevo.
+
+```json
+PUT /v1/notifications/settings/channels/<channel_id>
+{ "level": "all" }
+
+200 { "channel_id": "…", "muted": false, "level": "all" }
+```
+
+`GET /v1/notifications/settings` mantiene `servers` y `channels` (los silenciados) y agrega
+`preferences` con los niveles fijados.
 
 ## Eventos que consume
 
@@ -241,7 +291,7 @@ Mongo ante un `resync`.
 | `replica_servers`, `replica_roles`, `replica_members`, `replica_overrides` | réplica de permisos |
 | `event_clocks` | relojes LWW y lápidas |
 | `consumed_events` | auditoría de lo consumido |
-| `notification_settings` | `_id` = `user:canal_o_servidor`, `scope` (`server`/`channel`), `scope_id`, `server_id`, `muted` |
+| `notification_settings` | `_id` = `user:canal_o_servidor`, `scope` (`server`/`channel`), `scope_id`, `server_id`, `muted`, `level` (`all`/`mentions`/`none` o `null`) |
 | `socket_tickets` | tickets de un solo uso (TTL) |
 
 Los índices se crean al arrancar (`Notifications.Unread.IndexSetup`, con reintentos).
