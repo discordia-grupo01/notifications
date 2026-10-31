@@ -1,13 +1,16 @@
 # notifications (Elixir)
 
-Servicio de **notificaciones** de Discordia. Cubre la historia **"Ver notificaciones no
-leídas"**: CA1 indicador de no leído por canal, CA2 indicador de no leído por servidor (si al
-menos un canal tiene no leídos) y CA3 indicador destacado para las menciones (historia
-optativa, ya implementada del lado de `messaging` en #46).
+Servicio de **notificaciones** de Discordia. Cubre dos historias:
+
+- **"Ver notificaciones no leídas"**: CA1 indicador de no leído por canal, CA2 indicador de no
+  leído por servidor (si al menos un canal tiene no leídos) y CA3 indicador destacado para las
+  menciones (historia optativa, ya implementada del lado de `messaging` en #46).
+- **"Silenciar notificaciones de un canal o servidor"** (HU #64): ver "Silenciar un canal o un
+  servidor".
 
 El servicio **no llama a ningún otro servicio por HTTP**: todo lo que sabe lo aprende
-consumiendo eventos del bus. Lo único que expone por REST es el ticket para abrir el
-WebSocket (ver "Por qué hay un endpoint HTTP").
+consumiendo eventos del bus. Lo que expone por REST es el ticket para abrir el WebSocket (ver
+"Por qué hay un endpoint HTTP") y la configuración del propio usuario (silenciados).
 
 ## Stack
 - Lenguaje: Elixir / Phoenix (Channels para WS)
@@ -59,13 +62,19 @@ WebSocket (ver "Por qué hay un endpoint HTTP").
 El navegador no puede mandar el header `Authorization` al abrir un WebSocket y poner el JWT
 en la URL lo deja en logs (ADR 0002). Por eso el cliente pide un ticket de un solo uso
 (30 s) con `POST /v1/notifications/socket-tickets` y conecta con `?ticket=<ticket>`. Es la
-única excepción a "todo por eventos", y es la misma que ya usa `messaging`.
+única excepción a "todo por eventos" en el flujo de lectura, y es la misma que ya usa
+`messaging`. Los silenciados son configuración del usuario, no un hecho de otro servicio, y por eso
+se guardan acá y se piden por REST.
 
 ## Endpoints / Channels
 
 - `GET /health` (ping: responde `{"status":"ok"}` sin tocar Mongo ni el broker), `GET /livez` (igual, en texto plano), `GET /readyz` (readiness pinguea Mongo)
 - `POST /v1/notifications/socket-tickets` -- ticket para el WebSocket (Bearer JWT, validado
   por Kong)
+- `GET /v1/notifications/settings` -- qué servidores y canales silenció el usuario
+- `PUT /v1/notifications/settings/servers/:server_id` y
+  `PUT /v1/notifications/settings/channels/:channel_id` -- silenciar o reactivar
+  (`{"muted": true | false}`)
 - WS `/notifications/socket?ticket=<ticket>`, canal `notifications:<user_id>` (solo se puede
   unir uno a su propio topic)
 
@@ -83,13 +92,18 @@ Al unirse el servidor empuja `snapshot` con el estado completo; después va empu
       "server_id": "…",
       "unread": true,
       "mention": false,
+      "muted": false,
       "channels": [
-        { "channel_id": "…", "unread": true, "mention": false }
+        { "channel_id": "…", "unread": true, "mention": false, "muted": false }
       ]
     }
-  ]
+  ],
+  "muted": { "servers": ["…"], "channels": ["…"] }
 }
 ```
+
+`muted` (arriba de todo) lista lo que el usuario silenció explícitamente, aunque no tenga nada sin
+leer: sirve para dibujar el estado de cada canal y servidor sin pedir nada más.
 
 `unread_updated` -- cambió el estado de un canal (y de su servidor):
 
@@ -99,7 +113,8 @@ Al unirse el servidor empuja `snapshot` con el estado completo; después va empu
   "channel_id": "…",
   "unread": true,
   "mention": true,
-  "server": { "unread": true, "mention": true }
+  "muted": false,
+  "server": { "unread": true, "mention": true, "muted": false }
 }
 ```
 
@@ -139,6 +154,37 @@ Ejemplo (frames Phoenix v2, `[join_ref, ref, topic, event, payload]`):
 ```json
 ["1","1","notifications:<user_id>","phx_join",{}]
 ["1","2","notifications:<user_id>","mark_read",{"channel_id":"<channel_id>"}]
+```
+
+### Silenciar un canal o un servidor
+
+Silenciar apaga **solo el aviso destacado** (`mention`); la actividad sigue contando como no
+leída (`unread`). Sale de dos silenciados posibles y se combinan con un "o":
+
+| Silenciado | Efecto |
+|---|---|
+| Un canal | Ese canal queda `muted: true`; sus menciones dejan de destacarse. |
+| Un servidor | Todos sus canales quedan `muted: true` y el servidor también. |
+
+- `muted` del servidor es verdadero solo si se silenció **el servidor**; silenciar uno de sus
+  canales no lo marca.
+- El `mention` del servidor se calcula con los canales no silenciados: si el único canal con
+  mención está silenciado, el servidor queda `unread: true` y `mention: false`.
+- Reactivar (`{"muted": false}`) devuelve el aviso destacado de inmediato: la mención se deriva de
+  los mismos marcadores, así que una mención todavía sin leer vuelve a destacarse.
+- Para silenciar un canal hay que poder verlo (`403 FORBIDDEN`, o `404 CHANNEL_NOT_FOUND` si no
+  existe); para silenciar un servidor hay que ser miembro (`404 SERVER_NOT_FOUND`). Reactivar no
+  pide nada: siempre se puede sacar un silenciado.
+- Es idempotente: repetir el mismo pedido deja el mismo resultado.
+- Al guardar, el servicio le dice a todas las sesiones abiertas del usuario que recarguen su
+  estado, así que reciben un `snapshot` nuevo con el `muted` actualizado.
+- Si el usuario deja el servidor o el servidor/canal se borra, sus silenciados se borran también.
+
+```json
+PUT /v1/notifications/settings/channels/<channel_id>
+{ "muted": true }
+
+200 { "channel_id": "…", "muted": true }
 ```
 
 ## Eventos que consume
@@ -195,6 +241,7 @@ Mongo ante un `resync`.
 | `replica_servers`, `replica_roles`, `replica_members`, `replica_overrides` | réplica de permisos |
 | `event_clocks` | relojes LWW y lápidas |
 | `consumed_events` | auditoría de lo consumido |
+| `notification_settings` | `_id` = `user:canal_o_servidor`, `scope` (`server`/`channel`), `scope_id`, `server_id`, `muted` |
 | `socket_tickets` | tickets de un solo uso (TTL) |
 
 Los índices se crean al arrancar (`Notifications.Unread.IndexSetup`, con reintentos).
