@@ -1,6 +1,6 @@
 defmodule Notifications.Unread do
   alias Notifications.UUID
-  alias Notifications.Mutes
+  alias Notifications.Settings
   alias Notifications.Unread.{Access, Repo, State}
 
   @uuid_v7 ~r/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -18,8 +18,8 @@ defmodule Notifications.Unread do
          {:ok, activity} <- repo.get_activity(channel_ids),
          {:ok, reads} <- repo.get_read_markers(user_id, channel_ids),
          {:ok, mentions} <- repo.get_mention_markers(user_id, channel_ids),
-         {:ok, mutes} <- Mutes.scopes(user_id) do
-      {:ok, visible |> State.build(activity, reads, mentions) |> State.apply_mutes(mutes)}
+         {:ok, settings} <- Settings.scopes(user_id) do
+      {:ok, visible |> State.build(activity, reads, mentions) |> State.apply_settings(settings)}
     end
   end
 
