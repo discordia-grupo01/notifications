@@ -2,9 +2,20 @@
 components:
   responses: {}
   schemas:
-    ChannelMute:
+    ChannelSetting:
       properties:
         channel_id:
+          type: string
+          x-struct:
+          x-validate:
+        level:
+          description: Preferencia guardada, o `null` si hereda la del servidor.
+          enum:
+            - all
+            - mentions
+            - none
+            -
+          nullable: true
           type: string
           x-struct:
           x-validate:
@@ -15,9 +26,10 @@ components:
       required:
         - channel_id
         - muted
-      title: ChannelMute
+        - level
+      title: ChannelSetting
       type: object
-      x-struct: Elixir.NotificationsWeb.Schemas.ChannelMute
+      x-struct: Elixir.NotificationsWeb.Schemas.ChannelSetting
       x-validate:
     ErrorResponse:
       properties:
@@ -48,20 +60,36 @@ components:
       type: object
       x-struct: Elixir.NotificationsWeb.Schemas.ErrorResponse
       x-validate:
-    MuteRequest:
+    ServerSetting:
       properties:
+        level:
+          description: Preferencia guardada, o `null` si no hay (se usa el valor por defecto).
+          enum:
+            - all
+            - mentions
+            - none
+            -
+          nullable: true
+          type: string
+          x-struct:
+          x-validate:
         muted:
-          description: '`true` silencia; `false` reactiva las notificaciones destacadas.'
           type: boolean
           x-struct:
           x-validate:
+        server_id:
+          type: string
+          x-struct:
+          x-validate:
       required:
+        - server_id
         - muted
-      title: MuteRequest
+        - level
+      title: ServerSetting
       type: object
-      x-struct: Elixir.NotificationsWeb.Schemas.MuteRequest
+      x-struct: Elixir.NotificationsWeb.Schemas.ServerSetting
       x-validate:
-    MutedScopes:
+    SettingsListing:
       properties:
         channels:
           description: Canales que el usuario silenció, con el servidor al que pertenecen.
@@ -84,6 +112,68 @@ components:
           type: array
           x-struct:
           x-validate:
+        preferences:
+          description: Preferencias de nivel que el usuario fijó.
+          properties:
+            channels:
+              items:
+                properties:
+                  channel_id:
+                    type: string
+                    x-struct:
+                    x-validate:
+                  level:
+                    enum:
+                      - all
+                      - mentions
+                      - none
+                    type: string
+                    x-struct:
+                    x-validate:
+                  server_id:
+                    type: string
+                    x-struct:
+                    x-validate:
+                required:
+                  - channel_id
+                  - server_id
+                  - level
+                type: object
+                x-struct:
+                x-validate:
+              type: array
+              x-struct:
+              x-validate:
+            servers:
+              items:
+                properties:
+                  level:
+                    enum:
+                      - all
+                      - mentions
+                      - none
+                    type: string
+                    x-struct:
+                    x-validate:
+                  server_id:
+                    type: string
+                    x-struct:
+                    x-validate:
+                required:
+                  - server_id
+                  - level
+                type: object
+                x-struct:
+                x-validate:
+              type: array
+              x-struct:
+              x-validate:
+          required:
+            - servers
+            - channels
+          type: object
+          x-struct:
+          x-validate:
         servers:
           description: Ids de los servidores que el usuario silenció.
           items:
@@ -96,26 +186,33 @@ components:
       required:
         - servers
         - channels
-      title: MutedScopes
+        - preferences
+      title: SettingsListing
       type: object
-      x-struct: Elixir.NotificationsWeb.Schemas.MutedScopes
+      x-struct: Elixir.NotificationsWeb.Schemas.SettingsListing
       x-validate:
-    ServerMute:
+    SettingsRequest:
+      description: Al menos uno de `muted` o `level`. Solo cambia lo que se manda.
       properties:
-        muted:
-          type: boolean
-          x-struct:
-          x-validate:
-        server_id:
+        level:
+          description: 'Qué avisa: `all` (todos los mensajes), `mentions` (solo menciones; es el valor por defecto) o `none`. `null` borra la preferencia y vuelve a heredar.'
+          enum:
+            - all
+            - mentions
+            - none
+            -
+          nullable: true
           type: string
           x-struct:
           x-validate:
-      required:
-        - server_id
-        - muted
-      title: ServerMute
+        muted:
+          description: '`true` silencia; `false` reactiva las notificaciones destacadas.'
+          type: boolean
+          x-struct:
+          x-validate:
+      title: SettingsRequest
       type: object
-      x-struct: Elixir.NotificationsWeb.Schemas.ServerMute
+      x-struct: Elixir.NotificationsWeb.Schemas.SettingsRequest
       x-validate:
     SocketTicket:
       properties:
@@ -210,6 +307,7 @@ paths:
   /v1/notifications/settings:
     get:
       callbacks: {}
+      description: '`servers` y `channels` son los silenciados. `preferences` lista las preferencias de nivel (`all`, `mentions`, `none`) que el usuario fijó; lo que no aparece usa el valor heredado o el por defecto (`mentions`).'
       operationId: NotificationsWeb.SettingsController.index
       parameters: []
       responses:
@@ -217,8 +315,8 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MutedScopes'
-          description: Silenciados del usuario
+                $ref: '#/components/schemas/SettingsListing'
+          description: Configuración del usuario
         '401':
           content:
             application/json:
@@ -231,13 +329,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: No se pudo leer la configuración
-      summary: Lista los servidores y canales que el usuario silenció
+      summary: Lista los servidores y canales que el usuario silenció o configuró
       tags:
         - settings
   /v1/notifications/settings/channels/{channel_id}:
     put:
       callbacks: {}
-      description: Silenciar un canal apaga sus notificaciones destacadas (menciones). La actividad sigue contando como no leída. Para silenciarlo hay que poder ver el canal; reactivarlo no tiene esa condición. Es idempotente y las otras sesiones del usuario se enteran por `snapshot`.
+      description: 'Acepta `muted`, `level` o ambos; solo cambia lo que se manda. `level` elige qué avisa el canal: `all`, `mentions` o `none`, y reemplaza al nivel del servidor. `level: null` borra la preferencia y el canal vuelve a heredar. Para fijar algo hay que poder ver el canal; borrar o reactivar no tiene esa condición. Es idempotente y las otras sesiones del usuario se enteran por `snapshot`.'
       operationId: NotificationsWeb.SettingsController.update_channel
       parameters:
         - description: Id del canal
@@ -252,7 +350,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/MuteRequest'
+              $ref: '#/components/schemas/SettingsRequest'
         description: Estado deseado
         required: true
       responses:
@@ -260,14 +358,14 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ChannelMute'
+                $ref: '#/components/schemas/ChannelSetting'
           description: Estado resultante
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-          description: '`muted` falta o no es booleano'
+          description: Falta `muted`/`level` o alguno es inválido
         '401':
           content:
             application/json:
@@ -292,13 +390,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: No se pudo guardar la configuración
-      summary: Silencia o reactiva un canal
+      summary: Silencia, reactiva o configura el nivel de notificación de un canal
       tags:
         - settings
   /v1/notifications/settings/servers/{server_id}:
     put:
       callbacks: {}
-      description: Silenciar un servidor apaga las notificaciones destacadas (menciones) de todos sus canales. La actividad sigue contando como no leída. Es idempotente y las otras sesiones del usuario se enteran por `snapshot`.
+      description: 'Acepta `muted`, `level` o ambos; solo cambia lo que se manda. Silenciar apaga todos los avisos destacados de sus canales (la actividad sigue contando como no leída). `level` elige qué avisa: `all` (todos los mensajes), `mentions` (solo menciones, el valor por defecto) o `none`. `level: null` borra la preferencia. Un canal con su propia preferencia gana sobre la del servidor; silenciar siempre gana. Es idempotente y las otras sesiones del usuario se enteran por `snapshot`.'
       operationId: NotificationsWeb.SettingsController.update_server
       parameters:
         - description: Id del servidor
@@ -313,7 +411,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/MuteRequest'
+              $ref: '#/components/schemas/SettingsRequest'
         description: Estado deseado
         required: true
       responses:
@@ -321,14 +419,14 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ServerMute'
+                $ref: '#/components/schemas/ServerSetting'
           description: Estado resultante
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-          description: '`muted` falta o no es booleano'
+          description: Falta `muted`/`level` o alguno es inválido
         '401':
           content:
             application/json:
@@ -347,7 +445,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: No se pudo guardar la configuración
-      summary: Silencia o reactiva un servidor completo
+      summary: Silencia, reactiva o configura el nivel de notificación de un servidor
       tags:
         - settings
   /v1/notifications/socket-tickets:

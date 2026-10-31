@@ -5,11 +5,15 @@ defmodule Notifications.Unread.State do
           last_message_id: String.t() | nil,
           last_mention_id: String.t() | nil,
           channel_muted: boolean(),
-          server_muted: boolean()
+          server_muted: boolean(),
+          channel_level: String.t() | nil,
+          server_level: String.t() | nil
         }
   @type t :: %{String.t() => channel()}
-  @type flags :: %{unread: boolean(), mention: boolean(), muted: boolean()}
-  @type mutes :: %{servers: MapSet.t(String.t()), channels: MapSet.t(String.t())}
+  @type flags :: %{unread: boolean(), mention: boolean(), notify: boolean(), muted: boolean()}
+  @type settings :: Notifications.Settings.scopes()
+
+  @default_level "mentions"
 
   @spec build([map()], %{String.t() => String.t()}, map(), map()) :: t()
   def build(visible, activity, reads, mentions) do
@@ -21,19 +25,23 @@ defmodule Notifications.Unread.State do
          last_message_id: Map.get(activity, id),
          last_mention_id: Map.get(mentions, id),
          channel_muted: false,
-         server_muted: false
+         server_muted: false,
+         channel_level: nil,
+         server_level: nil
        }}
     end)
   end
 
-  @spec apply_mutes(t(), mutes()) :: t()
-  def apply_mutes(state, %{servers: servers, channels: channels}) do
+  @spec apply_settings(t(), settings()) :: t()
+  def apply_settings(state, settings) do
     Map.new(state, fn {id, channel} ->
       {id,
        %{
          channel
-         | channel_muted: MapSet.member?(channels, id),
-           server_muted: MapSet.member?(servers, channel.server_id)
+         | channel_muted: MapSet.member?(settings.muted_channels, id),
+           server_muted: MapSet.member?(settings.muted_servers, channel.server_id),
+           channel_level: Map.get(settings.channel_levels, id),
+           server_level: Map.get(settings.server_levels, channel.server_id)
        }}
     end)
   end
@@ -61,7 +69,7 @@ defmodule Notifications.Unread.State do
   def channel_flags(state, channel_id) do
     case Map.fetch(state, channel_id) do
       {:ok, channel} -> flags(channel)
-      :error -> %{unread: false, mention: false, muted: false}
+      :error -> %{unread: false, mention: false, notify: false, muted: false}
     end
   end
 
@@ -71,8 +79,12 @@ defmodule Notifications.Unread.State do
 
     channels
     |> Enum.map(&flags/1)
-    |> Enum.reduce(%{unread: false, mention: false}, fn flags, acc ->
-      %{unread: acc.unread or flags.unread, mention: acc.mention or flags.mention}
+    |> Enum.reduce(%{unread: false, mention: false, notify: false}, fn flags, acc ->
+      %{
+        unread: acc.unread or flags.unread,
+        mention: acc.mention or flags.mention,
+        notify: acc.notify or flags.notify
+      }
     end)
     |> Map.put(:muted, Enum.any?(channels, & &1.server_muted))
   end
@@ -87,7 +99,11 @@ defmodule Notifications.Unread.State do
       |> Enum.map(fn {server_id, channels} -> server_entry(state, server_id, channels) end)
       |> Enum.sort_by(& &1["server_id"])
 
-    %{"servers" => servers, "muted" => muted_scopes(state)}
+    %{
+      "servers" => servers,
+      "muted" => muted_scopes(state),
+      "preferences" => preferences(state)
+    }
   end
 
   @spec change(t(), String.t()) :: map()
@@ -101,10 +117,12 @@ defmodule Notifications.Unread.State do
       "channel_id" => channel_id,
       "unread" => channel_flags.unread,
       "mention" => channel_flags.mention,
+      "notify" => channel_flags.notify,
       "muted" => channel_flags.muted,
       "server" => %{
         "unread" => server_flags.unread,
         "mention" => server_flags.mention,
+        "notify" => server_flags.notify,
         "muted" => server_flags.muted
       }
     }
@@ -133,14 +151,23 @@ defmodule Notifications.Unread.State do
 
   defp flags(%{baseline: baseline, last_message_id: last, last_mention_id: mention} = channel) do
     muted? = channel.channel_muted or channel.server_muted
+    level = effective_level(channel, muted?)
     mentioned? = is_binary(mention) and mention > baseline
+    unread? = mentioned? or (is_binary(last) and last > baseline)
+    mention? = mentioned? and level != "none"
 
     %{
-      unread: mentioned? or (is_binary(last) and last > baseline),
-      mention: mentioned? and not muted?,
+      unread: unread?,
+      mention: mention?,
+      notify: mention? or (level == "all" and unread?),
       muted: muted?
     }
   end
+
+  defp effective_level(_channel, true), do: "none"
+
+  defp effective_level(channel, false),
+    do: channel.channel_level || channel.server_level || @default_level
 
   defp muted_scopes(state) do
     channels = Map.values(state)
@@ -156,6 +183,19 @@ defmodule Notifications.Unread.State do
     }
   end
 
+  defp preferences(state) do
+    %{
+      "servers" =>
+        for(channel <- Map.values(state), channel.server_level, into: %{}) do
+          {channel.server_id, channel.server_level}
+        end,
+      "channels" =>
+        for({id, channel} <- state, channel.channel_level, into: %{}) do
+          {id, channel.channel_level}
+        end
+    }
+  end
+
   defp server_entry(state, server_id, channels) do
     server = server_flags(state, server_id)
 
@@ -163,6 +203,7 @@ defmodule Notifications.Unread.State do
       "server_id" => server_id,
       "unread" => server.unread,
       "mention" => server.mention,
+      "notify" => server.notify,
       "muted" => server.muted,
       "channels" =>
         channels
@@ -171,6 +212,7 @@ defmodule Notifications.Unread.State do
             "channel_id" => id,
             "unread" => flags.unread,
             "mention" => flags.mention,
+            "notify" => flags.notify,
             "muted" => flags.muted
           }
         end)

@@ -2,6 +2,7 @@ defmodule Notifications.Unread.Repo do
   @type result :: :ok | {:error, term()}
   @type write_result :: {:ok, :applied | :stale} | {:error, term()}
   @type read_entry :: %{channel_id: String.t(), server_id: String.t(), message_id: String.t()}
+  @type setting_changes :: %{optional(:muted) => boolean(), optional(:level) => String.t() | nil}
   @type override :: %{role_id: String.t(), allow: [String.t()], deny: [String.t()]}
 
   @callback ping() :: :ok | {:error, term()}
@@ -55,14 +56,16 @@ defmodule Notifications.Unread.Repo do
   @callback mark_read(user_id :: String.t(), String.t(), String.t(), message_id :: String.t()) ::
               result()
 
-  @callback list_mutes(user_id :: String.t()) :: {:ok, [map()]} | {:error, term()}
-  @callback put_mute(
+  @callback list_settings(user_id :: String.t()) :: {:ok, [map()]} | {:error, term()}
+  @callback get_setting(user_id :: String.t(), scope_id :: String.t()) ::
+              map() | nil | {:error, term()}
+  @callback put_setting(
               user_id :: String.t(),
               scope :: :server | :channel,
               scope_id :: String.t(),
-              server_id :: String.t()
+              server_id :: String.t(),
+              changes :: setting_changes()
             ) :: result()
-  @callback delete_mute(user_id :: String.t(), scope_id :: String.t()) :: result()
 
   @spec impl() :: module()
   def impl, do: Application.get_env(:notifications, :unread_repo, Notifications.Unread.Repo.Mongo)

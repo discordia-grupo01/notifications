@@ -43,55 +43,74 @@ defmodule NotificationsWeb.Schemas do
     })
   end
 
-  defmodule MuteRequest do
+  defmodule SettingsRequest do
     require OpenApiSpex
 
     OpenApiSpex.schema(%{
-      title: "MuteRequest",
+      title: "SettingsRequest",
       type: :object,
+      description: "Al menos uno de `muted` o `level`. Solo cambia lo que se manda.",
       properties: %{
         muted: %Schema{
           type: :boolean,
           description: "`true` silencia; `false` reactiva las notificaciones destacadas."
+        },
+        level: %Schema{
+          type: :string,
+          nullable: true,
+          enum: ["all", "mentions", "none", nil],
+          description:
+            "Qué avisa: `all` (todos los mensajes), `mentions` (solo menciones; es el valor por defecto) o `none`. `null` borra la preferencia y vuelve a heredar."
         }
-      },
-      required: [:muted]
+      }
     })
   end
 
-  defmodule ServerMute do
+  defmodule ServerSetting do
     require OpenApiSpex
 
     OpenApiSpex.schema(%{
-      title: "ServerMute",
+      title: "ServerSetting",
       type: :object,
       properties: %{
         server_id: %Schema{type: :string},
-        muted: %Schema{type: :boolean}
+        muted: %Schema{type: :boolean},
+        level: %Schema{
+          type: :string,
+          nullable: true,
+          enum: ["all", "mentions", "none", nil],
+          description: "Preferencia guardada, o `null` si no hay (se usa el valor por defecto)."
+        }
       },
-      required: [:server_id, :muted]
+      required: [:server_id, :muted, :level]
     })
   end
 
-  defmodule ChannelMute do
+  defmodule ChannelSetting do
     require OpenApiSpex
 
     OpenApiSpex.schema(%{
-      title: "ChannelMute",
+      title: "ChannelSetting",
       type: :object,
       properties: %{
         channel_id: %Schema{type: :string},
-        muted: %Schema{type: :boolean}
+        muted: %Schema{type: :boolean},
+        level: %Schema{
+          type: :string,
+          nullable: true,
+          enum: ["all", "mentions", "none", nil],
+          description: "Preferencia guardada, o `null` si hereda la del servidor."
+        }
       },
-      required: [:channel_id, :muted]
+      required: [:channel_id, :muted, :level]
     })
   end
 
-  defmodule MutedScopes do
+  defmodule SettingsListing do
     require OpenApiSpex
 
     OpenApiSpex.schema(%{
-      title: "MutedScopes",
+      title: "SettingsListing",
       type: :object,
       properties: %{
         servers: %Schema{
@@ -110,9 +129,39 @@ defmodule NotificationsWeb.Schemas do
             },
             required: [:channel_id, :server_id]
           }
+        },
+        preferences: %Schema{
+          type: :object,
+          description: "Preferencias de nivel que el usuario fijó.",
+          properties: %{
+            servers: %Schema{
+              type: :array,
+              items: %Schema{
+                type: :object,
+                properties: %{
+                  server_id: %Schema{type: :string},
+                  level: %Schema{type: :string, enum: ["all", "mentions", "none"]}
+                },
+                required: [:server_id, :level]
+              }
+            },
+            channels: %Schema{
+              type: :array,
+              items: %Schema{
+                type: :object,
+                properties: %{
+                  channel_id: %Schema{type: :string},
+                  server_id: %Schema{type: :string},
+                  level: %Schema{type: :string, enum: ["all", "mentions", "none"]}
+                },
+                required: [:channel_id, :server_id, :level]
+              }
+            }
+          },
+          required: [:servers, :channels]
         }
       },
-      required: [:servers, :channels]
+      required: [:servers, :channels, :preferences]
     })
   end
 end

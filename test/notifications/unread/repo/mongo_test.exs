@@ -292,88 +292,172 @@ if mongo_url do
       end
     end
 
-    describe "mutes" do
-      test "lists what the user muted and nothing from other users", %{
+    describe "settings" do
+      test "lists what the user configured and nothing from other users", %{
         server: s,
         channel: c,
         user: u
       } do
-        assert :ok = Repo.put_mute(u, :server, s, s)
-        assert :ok = Repo.put_mute(u, :channel, c, s)
-        assert :ok = Repo.put_mute("someone-else", :channel, c, s)
+        assert :ok = Repo.put_setting(u, :server, s, s, %{muted: true})
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{level: "all"})
+        assert :ok = Repo.put_setting("someone-else", :channel, c, s, %{muted: true})
 
-        assert {:ok, docs} = Repo.list_mutes(u)
+        assert {:ok, docs} = Repo.list_settings(u)
 
         assert docs |> Enum.map(&{&1["scope"], &1["scope_id"], &1["server_id"]}) |> Enum.sort() ==
                  Enum.sort([{"server", s, s}, {"channel", c, s}])
       end
 
-      test "muting twice keeps a single document", %{server: s, channel: c, user: u} do
-        assert :ok = Repo.put_mute(u, :channel, c, s)
-        assert :ok = Repo.put_mute(u, :channel, c, s)
-
-        assert {:ok, [_one]} = Repo.list_mutes(u)
-      end
-
-      test "CA3: unmuting removes it, and doing it again is harmless", %{
+      test "a first write stores the identity and defaults the other field", %{
         server: s,
         channel: c,
         user: u
       } do
-        :ok = Repo.put_mute(u, :channel, c, s)
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{level: "none"})
 
-        assert :ok = Repo.delete_mute(u, c)
-        assert :ok = Repo.delete_mute(u, c)
-        assert {:ok, []} = Repo.list_mutes(u)
+        assert %{
+                 "user_id" => ^u,
+                 "scope" => "channel",
+                 "scope_id" => ^c,
+                 "server_id" => ^s,
+                 "muted" => false,
+                 "level" => "none"
+               } = Repo.get_setting(u, c)
       end
 
-      test "unmuting does not affect another user's mute", %{server: s, channel: c, user: u} do
-        :ok = Repo.put_mute(u, :channel, c, s)
-        :ok = Repo.put_mute("someone-else", :channel, c, s)
+      test "writing one field keeps the other", %{server: s, channel: c, user: u} do
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+        :ok = Repo.put_setting(u, :channel, c, s, %{level: "all"})
 
-        assert :ok = Repo.delete_mute(u, c)
-        assert {:ok, [%{"user_id" => "someone-else"}]} = Repo.list_mutes("someone-else")
+        assert %{"muted" => true, "level" => "all"} = Repo.get_setting(u, c)
+
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: false})
+
+        assert %{"muted" => false, "level" => "all"} = Repo.get_setting(u, c)
       end
 
-      test "deleting a channel removes everybody's mute of it", %{server: s, channel: c, user: u} do
-        :ok = Repo.put_mute(u, :channel, c, s)
-        :ok = Repo.put_mute("someone-else", :channel, c, s)
-        :ok = Repo.put_mute(u, :server, s, s)
+      test "repeating a write keeps a single document", %{server: s, channel: c, user: u} do
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+
+        assert {:ok, [_one]} = Repo.list_settings(u)
+      end
+
+      test "CA3: unmuting a setting that has nothing else removes the document", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{muted: false})
+
+        assert Repo.get_setting(u, c) == nil
+        assert {:ok, []} = Repo.list_settings(u)
+      end
+
+      test "clearing the level of an unmuted setting removes the document", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_setting(u, :channel, c, s, %{level: "all"})
+
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{level: nil})
+
+        assert Repo.get_setting(u, c) == nil
+      end
+
+      test "clearing the level keeps a muted setting", %{server: s, channel: c, user: u} do
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true, level: "all"})
+
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{level: nil})
+
+        assert %{"muted" => true, "level" => nil} = Repo.get_setting(u, c)
+      end
+
+      test "unmuting keeps a setting that still has a level", %{server: s, channel: c, user: u} do
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true, level: "none"})
+
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{muted: false})
+
+        assert %{"muted" => false, "level" => "none"} = Repo.get_setting(u, c)
+      end
+
+      test "clearing something that never existed leaves nothing behind", %{
+        channel: c,
+        user: u
+      } do
+        assert :ok = Repo.put_setting(u, :channel, c, nil, %{muted: false, level: nil})
+
+        assert Repo.get_setting(u, c) == nil
+        assert {:ok, []} = Repo.list_settings(u)
+      end
+
+      test "clearing never overwrites the server the setting belongs to", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true, level: "all"})
+
+        assert :ok = Repo.put_setting(u, :channel, c, nil, %{level: nil})
+
+        assert %{"server_id" => ^s} = Repo.get_setting(u, c)
+      end
+
+      test "settings of other users are never touched", %{server: s, channel: c, user: u} do
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+        :ok = Repo.put_setting("someone-else", :channel, c, s, %{muted: true})
+
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{muted: false})
+
+        assert %{"muted" => true} = Repo.get_setting("someone-else", c)
+      end
+
+      test "deleting a channel removes everybody's settings of it", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_setting(u, :channel, c, s, %{level: "all"})
+        :ok = Repo.put_setting("someone-else", :channel, c, s, %{muted: true})
+        :ok = Repo.put_setting(u, :server, s, s, %{muted: true})
 
         assert :ok = Repo.delete_channel(c)
 
-        assert {:ok, [%{"scope" => "server"}]} = Repo.list_mutes(u)
-        assert {:ok, []} = Repo.list_mutes("someone-else")
+        assert {:ok, [%{"scope" => "server"}]} = Repo.list_settings(u)
+        assert {:ok, []} = Repo.list_settings("someone-else")
       end
 
-      test "deleting a server removes its mutes and the mutes of its channels", %{
+      test "deleting a server removes its settings and the ones of its channels", %{
         server: s,
         channel: c,
         user: u
       } do
-        :ok = Repo.put_mute(u, :server, s, s)
-        :ok = Repo.put_mute(u, :channel, c, s)
-        :ok = Repo.put_mute(u, :channel, "other-channel", "other-server")
+        :ok = Repo.put_setting(u, :server, s, s, %{level: "none"})
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+        :ok = Repo.put_setting(u, :channel, "other-channel", "other-server", %{level: "all"})
 
         assert :ok = Repo.delete_server_data(s, [c])
 
-        assert {:ok, [%{"scope_id" => "other-channel"}]} = Repo.list_mutes(u)
+        assert {:ok, [%{"scope_id" => "other-channel"}]} = Repo.list_settings(u)
       end
 
-      test "leaving a server removes only that user's mutes of it", %{
+      test "leaving a server removes only that user's settings of it", %{
         server: s,
         channel: c,
         user: u
       } do
-        :ok = Repo.put_mute(u, :server, s, s)
-        :ok = Repo.put_mute(u, :channel, c, s)
-        :ok = Repo.put_mute(u, :channel, "other-channel", "other-server")
-        :ok = Repo.put_mute("someone-else", :channel, c, s)
+        :ok = Repo.put_setting(u, :server, s, s, %{level: "all"})
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+        :ok = Repo.put_setting(u, :channel, "other-channel", "other-server", %{level: "all"})
+        :ok = Repo.put_setting("someone-else", :channel, c, s, %{muted: true})
 
         assert {:ok, :applied} = Repo.delete_member(s, u, @t2)
 
-        assert {:ok, [%{"scope_id" => "other-channel"}]} = Repo.list_mutes(u)
-        assert {:ok, [_one]} = Repo.list_mutes("someone-else")
+        assert {:ok, [%{"scope_id" => "other-channel"}]} = Repo.list_settings(u)
+        assert {:ok, [_one]} = Repo.list_settings("someone-else")
       end
     end
 

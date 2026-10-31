@@ -319,30 +319,35 @@ defmodule Notifications.Unread.Repo.Mongo do
   end
 
   @impl true
-  def list_mutes(user_id), do: list(@settings, %{"user_id" => user_id, "muted" => true})
+  def list_settings(user_id), do: list(@settings, %{"user_id" => user_id})
 
   @impl true
-  def put_mute(user_id, scope, scope_id, server_id) do
-    upsert(
-      @settings,
-      setting_key(user_id, scope_id),
-      %{
-        "$set" => %{
-          "user_id" => user_id,
-          "scope" => Atom.to_string(scope),
-          "scope_id" => scope_id,
-          "server_id" => server_id,
-          "muted" => true
-        }
-      }
-    )
-  end
+  def get_setting(user_id, scope_id),
+    do: Mongo.find_one(@conn, @settings, %{"_id" => setting_key(user_id, scope_id)})
 
   @impl true
-  def delete_mute(user_id, scope_id) do
-    case Mongo.delete_one(@conn, @settings, %{"_id" => setting_key(user_id, scope_id)}) do
-      {:ok, _result} -> :ok
-      {:error, reason} -> {:error, reason}
+  def put_setting(user_id, scope, scope_id, server_id, changes) do
+    key = setting_key(user_id, scope_id)
+    fields = Map.new(changes, fn {field, value} -> {Atom.to_string(field), value} end)
+
+    identity = %{
+      "user_id" => user_id,
+      "scope" => Atom.to_string(scope),
+      "scope_id" => scope_id,
+      "server_id" => server_id
+    }
+
+    defaults = Map.drop(%{"muted" => false, "level" => nil}, Map.keys(fields))
+    update = %{"$set" => fields, "$setOnInsert" => Map.merge(identity, defaults)}
+
+    with :ok <- upsert(@settings, key, update),
+         {:ok, _result} <-
+           Mongo.delete_one(@conn, @settings, %{
+             "_id" => key,
+             "muted" => %{"$ne" => true},
+             "level" => nil
+           }) do
+      :ok
     end
   end
 
