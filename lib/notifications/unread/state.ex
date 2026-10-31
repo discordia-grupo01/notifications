@@ -3,10 +3,13 @@ defmodule Notifications.Unread.State do
           server_id: String.t(),
           baseline: String.t(),
           last_message_id: String.t() | nil,
-          last_mention_id: String.t() | nil
+          last_mention_id: String.t() | nil,
+          channel_muted: boolean(),
+          server_muted: boolean()
         }
   @type t :: %{String.t() => channel()}
-  @type flags :: %{unread: boolean(), mention: boolean()}
+  @type flags :: %{unread: boolean(), mention: boolean(), muted: boolean()}
+  @type mutes :: %{servers: MapSet.t(String.t()), channels: MapSet.t(String.t())}
 
   @spec build([map()], %{String.t() => String.t()}, map(), map()) :: t()
   def build(visible, activity, reads, mentions) do
@@ -16,7 +19,21 @@ defmodule Notifications.Unread.State do
          server_id: server_id,
          baseline: Enum.max([floor, Map.get(reads, id, "")]),
          last_message_id: Map.get(activity, id),
-         last_mention_id: Map.get(mentions, id)
+         last_mention_id: Map.get(mentions, id),
+         channel_muted: false,
+         server_muted: false
+       }}
+    end)
+  end
+
+  @spec apply_mutes(t(), mutes()) :: t()
+  def apply_mutes(state, %{servers: servers, channels: channels}) do
+    Map.new(state, fn {id, channel} ->
+      {id,
+       %{
+         channel
+         | channel_muted: MapSet.member?(channels, id),
+           server_muted: MapSet.member?(servers, channel.server_id)
        }}
     end)
   end
@@ -44,18 +61,20 @@ defmodule Notifications.Unread.State do
   def channel_flags(state, channel_id) do
     case Map.fetch(state, channel_id) do
       {:ok, channel} -> flags(channel)
-      :error -> %{unread: false, mention: false}
+      :error -> %{unread: false, mention: false, muted: false}
     end
   end
 
   @spec server_flags(t(), String.t()) :: flags()
   def server_flags(state, server_id) do
-    state
-    |> Enum.filter(fn {_id, channel} -> channel.server_id == server_id end)
-    |> Enum.map(fn {_id, channel} -> flags(channel) end)
+    channels = for {_id, channel} <- state, channel.server_id == server_id, do: channel
+
+    channels
+    |> Enum.map(&flags/1)
     |> Enum.reduce(%{unread: false, mention: false}, fn flags, acc ->
       %{unread: acc.unread or flags.unread, mention: acc.mention or flags.mention}
     end)
+    |> Map.put(:muted, Enum.any?(channels, & &1.server_muted))
   end
 
   @spec snapshot(t()) :: map()
@@ -68,7 +87,7 @@ defmodule Notifications.Unread.State do
       |> Enum.map(fn {server_id, channels} -> server_entry(state, server_id, channels) end)
       |> Enum.sort_by(& &1["server_id"])
 
-    %{"servers" => servers}
+    %{"servers" => servers, "muted" => muted_scopes(state)}
   end
 
   @spec change(t(), String.t()) :: map()
@@ -82,7 +101,12 @@ defmodule Notifications.Unread.State do
       "channel_id" => channel_id,
       "unread" => channel_flags.unread,
       "mention" => channel_flags.mention,
-      "server" => %{"unread" => server_flags.unread, "mention" => server_flags.mention}
+      "muted" => channel_flags.muted,
+      "server" => %{
+        "unread" => server_flags.unread,
+        "mention" => server_flags.mention,
+        "muted" => server_flags.muted
+      }
     }
   end
 
@@ -107,9 +131,29 @@ defmodule Notifications.Unread.State do
 
   defp track_author(channel, _user_id, _event), do: channel
 
-  defp flags(%{baseline: baseline, last_message_id: last, last_mention_id: mention}) do
-    mention? = is_binary(mention) and mention > baseline
-    %{unread: mention? or (is_binary(last) and last > baseline), mention: mention?}
+  defp flags(%{baseline: baseline, last_message_id: last, last_mention_id: mention} = channel) do
+    muted? = channel.channel_muted or channel.server_muted
+    mentioned? = is_binary(mention) and mention > baseline
+
+    %{
+      unread: mentioned? or (is_binary(last) and last > baseline),
+      mention: mentioned? and not muted?,
+      muted: muted?
+    }
+  end
+
+  defp muted_scopes(state) do
+    channels = Map.values(state)
+
+    %{
+      "servers" =>
+        for(channel <- channels, channel.server_muted, do: channel.server_id)
+        |> Enum.uniq()
+        |> Enum.sort(),
+      "channels" =>
+        for({id, channel} <- state, channel.channel_muted, do: id)
+        |> Enum.sort()
+    }
   end
 
   defp server_entry(state, server_id, channels) do
@@ -119,10 +163,16 @@ defmodule Notifications.Unread.State do
       "server_id" => server_id,
       "unread" => server.unread,
       "mention" => server.mention,
+      "muted" => server.muted,
       "channels" =>
         channels
         |> Enum.map(fn {id, _server_id, flags} ->
-          %{"channel_id" => id, "unread" => flags.unread, "mention" => flags.mention}
+          %{
+            "channel_id" => id,
+            "unread" => flags.unread,
+            "mention" => flags.mention,
+            "muted" => flags.muted
+          }
         end)
         |> Enum.sort_by(& &1["channel_id"])
     }

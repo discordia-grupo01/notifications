@@ -20,7 +20,10 @@ defmodule NotificationsWeb.NotificationsChannelTest do
   @m3 "00000000-0000-7000-8000-000000000003"
 
   setup do
-    {:ok, world} = Agent.start_link(fn -> %{channels: [@c1, @c2], activity: %{}, reads: %{}} end)
+    {:ok, world} =
+      Agent.start_link(fn ->
+        %{channels: [@c1, @c2], activity: %{}, reads: %{}, mutes: []}
+      end)
 
     stub(RepoMock, :list_memberships, fn @me ->
       {:ok,
@@ -54,6 +57,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
     end)
 
     stub(RepoMock, :list_overrides, fn _ids -> {:ok, []} end)
+    stub(RepoMock, :list_mutes, fn @me -> {:ok, Agent.get(world, & &1.mutes)} end)
     stub(RepoMock, :get_activity, fn _ids -> {:ok, Agent.get(world, & &1.activity)} end)
     stub(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, Agent.get(world, & &1.reads)} end)
     stub(RepoMock, :get_mention_markers, fn @me, _ids -> {:ok, %{}} end)
@@ -218,6 +222,90 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       assert_push "unread_updated", _
       message_created(@c2, @m2)
       assert_push "unread_updated", %{"channel_id" => @c2}
+    end
+  end
+
+  describe "muted" do
+    test "CA1: the snapshot keeps a muted channel unread and lists what is muted", %{world: world} do
+      put_world(world, :activity, %{@c1 => @m1})
+      put_world(world, :mutes, [%{"scope" => "channel", "scope_id" => @c1, "server_id" => @s1}])
+      join_own()
+
+      assert_push "snapshot", %{
+        "servers" => [
+          %{
+            "unread" => true,
+            "mention" => false,
+            "muted" => false,
+            "channels" => [%{"channel_id" => @c1, "unread" => true, "muted" => true}]
+          }
+        ],
+        "muted" => %{"servers" => [], "channels" => [@c1]}
+      }
+    end
+
+    test "CA1: a mention in a muted channel is unread activity without highlight", %{world: world} do
+      put_world(world, :mutes, [%{"scope" => "channel", "scope_id" => @c1, "server_id" => @s1}])
+      join_own()
+      assert_push "snapshot", _
+
+      message_created(@c1, @m1, mentions: [@me])
+
+      assert_push "unread_updated", %{
+        "channel_id" => @c1,
+        "unread" => true,
+        "mention" => false,
+        "muted" => true,
+        "server" => %{"unread" => true, "mention" => false, "muted" => false}
+      }
+    end
+
+    test "CA2: no channel of a muted server is highlighted", %{world: world} do
+      put_world(world, :mutes, [%{"scope" => "server", "scope_id" => @s1, "server_id" => @s1}])
+      join_own()
+      assert_push "snapshot", %{"muted" => %{"servers" => [@s1], "channels" => []}}
+
+      message_created(@c1, @m1, mentions: [@me])
+      assert_push "unread_updated", %{"channel_id" => @c1, "mention" => false, "muted" => true}
+
+      message_created(@c2, @m2, mentions: [@me])
+
+      assert_push "unread_updated", %{
+        "channel_id" => @c2,
+        "mention" => false,
+        "server" => %{"unread" => true, "mention" => false, "muted" => true}
+      }
+    end
+
+    test "muting from another session reaches this one through a resync", %{world: world} do
+      stub(RepoMock, :put_mute, fn @me, :channel, @c1, @s1 ->
+        put_world(world, :mutes, [
+          %{"scope" => "channel", "scope_id" => @c1, "server_id" => @s1}
+        ])
+
+        :ok
+      end)
+
+      join_own()
+      assert_push "snapshot", %{"muted" => %{"channels" => []}}
+
+      assert {:ok, true} = Notifications.Mutes.set_channel(@me, @c1, true)
+
+      assert_push "snapshot", %{"muted" => %{"channels" => [@c1]}}
+    end
+
+    test "CA3: after unmuting, the next mention is highlighted again", %{world: world} do
+      put_world(world, :mutes, [%{"scope" => "channel", "scope_id" => @c1, "server_id" => @s1}])
+      stub(RepoMock, :delete_mute, fn @me, @c1 -> put_world(world, :mutes, []) end)
+      join_own()
+      assert_push "snapshot", %{"muted" => %{"channels" => [@c1]}}
+
+      assert {:ok, false} = Notifications.Mutes.set_channel(@me, @c1, false)
+      assert_push "snapshot", %{"muted" => %{"channels" => []}}
+
+      message_created(@c1, @m1, mentions: [@me])
+
+      assert_push "unread_updated", %{"channel_id" => @c1, "mention" => true, "muted" => false}
     end
   end
 
