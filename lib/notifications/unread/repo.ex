@@ -55,6 +55,15 @@ defmodule Notifications.Unread.Repo do
   @callback mark_read(user_id :: String.t(), String.t(), String.t(), message_id :: String.t()) ::
               result()
 
+  @callback list_mutes(user_id :: String.t()) :: {:ok, [map()]} | {:error, term()}
+  @callback put_mute(
+              user_id :: String.t(),
+              scope :: :server | :channel,
+              scope_id :: String.t(),
+              server_id :: String.t()
+            ) :: result()
+  @callback delete_mute(user_id :: String.t(), scope_id :: String.t()) :: result()
+
   @spec impl() :: module()
   def impl, do: Application.get_env(:notifications, :unread_repo, Notifications.Unread.Repo.Mongo)
 end

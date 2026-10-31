@@ -12,7 +12,7 @@ if mongo_url do
 
     @collections ~w(
       channels event_clocks channel_activity read_markers mention_markers
-      replica_servers replica_roles replica_members replica_overrides
+      replica_servers replica_roles replica_members replica_overrides notification_settings
     )
 
     setup do
@@ -289,6 +289,91 @@ if mongo_url do
 
       test "a user without memberships gets an empty list" do
         assert {:ok, []} = Repo.list_memberships("nobody")
+      end
+    end
+
+    describe "mutes" do
+      test "lists what the user muted and nothing from other users", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        assert :ok = Repo.put_mute(u, :server, s, s)
+        assert :ok = Repo.put_mute(u, :channel, c, s)
+        assert :ok = Repo.put_mute("someone-else", :channel, c, s)
+
+        assert {:ok, docs} = Repo.list_mutes(u)
+
+        assert docs |> Enum.map(&{&1["scope"], &1["scope_id"], &1["server_id"]}) |> Enum.sort() ==
+                 Enum.sort([{"server", s, s}, {"channel", c, s}])
+      end
+
+      test "muting twice keeps a single document", %{server: s, channel: c, user: u} do
+        assert :ok = Repo.put_mute(u, :channel, c, s)
+        assert :ok = Repo.put_mute(u, :channel, c, s)
+
+        assert {:ok, [_one]} = Repo.list_mutes(u)
+      end
+
+      test "CA3: unmuting removes it, and doing it again is harmless", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_mute(u, :channel, c, s)
+
+        assert :ok = Repo.delete_mute(u, c)
+        assert :ok = Repo.delete_mute(u, c)
+        assert {:ok, []} = Repo.list_mutes(u)
+      end
+
+      test "unmuting does not affect another user's mute", %{server: s, channel: c, user: u} do
+        :ok = Repo.put_mute(u, :channel, c, s)
+        :ok = Repo.put_mute("someone-else", :channel, c, s)
+
+        assert :ok = Repo.delete_mute(u, c)
+        assert {:ok, [%{"user_id" => "someone-else"}]} = Repo.list_mutes("someone-else")
+      end
+
+      test "deleting a channel removes everybody's mute of it", %{server: s, channel: c, user: u} do
+        :ok = Repo.put_mute(u, :channel, c, s)
+        :ok = Repo.put_mute("someone-else", :channel, c, s)
+        :ok = Repo.put_mute(u, :server, s, s)
+
+        assert :ok = Repo.delete_channel(c)
+
+        assert {:ok, [%{"scope" => "server"}]} = Repo.list_mutes(u)
+        assert {:ok, []} = Repo.list_mutes("someone-else")
+      end
+
+      test "deleting a server removes its mutes and the mutes of its channels", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_mute(u, :server, s, s)
+        :ok = Repo.put_mute(u, :channel, c, s)
+        :ok = Repo.put_mute(u, :channel, "other-channel", "other-server")
+
+        assert :ok = Repo.delete_server_data(s, [c])
+
+        assert {:ok, [%{"scope_id" => "other-channel"}]} = Repo.list_mutes(u)
+      end
+
+      test "leaving a server removes only that user's mutes of it", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_mute(u, :server, s, s)
+        :ok = Repo.put_mute(u, :channel, c, s)
+        :ok = Repo.put_mute(u, :channel, "other-channel", "other-server")
+        :ok = Repo.put_mute("someone-else", :channel, c, s)
+
+        assert {:ok, :applied} = Repo.delete_member(s, u, @t2)
+
+        assert {:ok, [%{"scope_id" => "other-channel"}]} = Repo.list_mutes(u)
+        assert {:ok, [_one]} = Repo.list_mutes("someone-else")
       end
     end
 

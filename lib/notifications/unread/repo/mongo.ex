@@ -7,6 +7,7 @@ defmodule Notifications.Unread.Repo.Mongo do
   @activity "channel_activity"
   @read_markers "read_markers"
   @mention_markers "mention_markers"
+  @settings "notification_settings"
   @replica_servers "replica_servers"
   @replica_roles "replica_roles"
   @replica_members "replica_members"
@@ -29,6 +30,12 @@ defmodule Notifications.Unread.Repo.Mongo do
     by_user = [[name: "by_user_channel", key: [user_id: 1, channel_id: 1]]]
     by_user_server = [[name: "by_user_server", key: [user_id: 1, server_id: 1]]]
 
+    settings_indexes = [
+      [name: "by_user", key: [user_id: 1]],
+      [name: "by_server", key: [server_id: 1]],
+      [name: "by_scope", key: [scope_id: 1]]
+    ]
+
     clock_ttl = [
       [name: "event_clocks_expires_at_ttl", key: [expires_at: 1], expireAfterSeconds: 0]
     ]
@@ -44,6 +51,7 @@ defmodule Notifications.Unread.Repo.Mongo do
              @replica_members,
              replica_ttl ++ by_server ++ [[name: "by_user", key: [user_id: 1]]]
            ),
+         :ok <- Mongo.create_indexes(@conn, @settings, settings_indexes),
          :ok <- Mongo.create_indexes(@conn, @replica_overrides, by_server) do
       Mongo.create_indexes(@conn, @clocks, clock_ttl)
     end
@@ -88,6 +96,7 @@ defmodule Notifications.Unread.Repo.Mongo do
          {:ok, _result} <- Mongo.delete_many(@conn, @read_markers, %{"channel_id" => channel_id}),
          {:ok, _result} <-
            Mongo.delete_many(@conn, @mention_markers, %{"channel_id" => channel_id}),
+         {:ok, _result} <- Mongo.delete_many(@conn, @settings, %{"scope_id" => channel_id}),
          {:ok, _result} <- Mongo.delete_one(@conn, @replica_overrides, %{"_id" => channel_id}),
          {:ok, _result} <- Mongo.delete_one(@conn, @channels, %{"_id" => channel_id}) do
       :ok
@@ -106,6 +115,7 @@ defmodule Notifications.Unread.Repo.Mongo do
          {:ok, _result} <- Mongo.delete_many(@conn, @mention_markers, by_channels),
          {:ok, _result} <- Mongo.delete_many(@conn, @read_markers, by_server),
          {:ok, _result} <- Mongo.delete_many(@conn, @mention_markers, by_server),
+         {:ok, _result} <- Mongo.delete_many(@conn, @settings, by_server),
          {:ok, _result} <- Mongo.delete_many(@conn, @replica_overrides, by_server),
          {:ok, _result} <- Mongo.delete_many(@conn, @replica_members, by_server),
          {:ok, _result} <- Mongo.delete_many(@conn, @replica_roles, by_server),
@@ -180,7 +190,9 @@ defmodule Notifications.Unread.Repo.Mongo do
            Mongo.delete_many(@conn, @mention_markers, %{
              "user_id" => user_id,
              "server_id" => server_id
-           }) do
+           }),
+         {:ok, _result} <-
+           Mongo.delete_many(@conn, @settings, %{"user_id" => user_id, "server_id" => server_id}) do
       {:ok, :applied}
     end
   end
@@ -306,6 +318,34 @@ defmodule Notifications.Unread.Repo.Mongo do
     )
   end
 
+  @impl true
+  def list_mutes(user_id), do: list(@settings, %{"user_id" => user_id, "muted" => true})
+
+  @impl true
+  def put_mute(user_id, scope, scope_id, server_id) do
+    upsert(
+      @settings,
+      setting_key(user_id, scope_id),
+      %{
+        "$set" => %{
+          "user_id" => user_id,
+          "scope" => Atom.to_string(scope),
+          "scope_id" => scope_id,
+          "server_id" => server_id,
+          "muted" => true
+        }
+      }
+    )
+  end
+
+  @impl true
+  def delete_mute(user_id, scope_id) do
+    case Mongo.delete_one(@conn, @settings, %{"_id" => setting_key(user_id, scope_id)}) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp ensure_channel(channel_id, server_id) do
     update = %{"$setOnInsert" => %{"server_id" => server_id, "kind" => "text"}}
 
@@ -390,6 +430,7 @@ defmodule Notifications.Unread.Repo.Mongo do
 
   defp member_key(server_id, user_id), do: "#{server_id}:#{user_id}"
   defp marker_key(user_id, channel_id), do: "#{user_id}:#{channel_id}"
+  defp setting_key(user_id, scope_id), do: "#{user_id}:#{scope_id}"
 
   defp cached_channel_ids(server_id) do
     @conn
