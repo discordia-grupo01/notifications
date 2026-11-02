@@ -11,6 +11,9 @@ defmodule NotificationsWeb.HistoryControllerTest do
   @m1 "00000000-0000-7000-8000-000000000001"
   @m2 "00000000-0000-7000-8000-000000000002"
   @at ~U[2026-10-31 12:00:00.000000Z]
+  @at_ms ~U[2026-10-31 12:00:00.000Z]
+
+  defp cursor_for(message_id), do: "#{DateTime.to_unix(@at, :millisecond)}_#{message_id}"
 
   defp authed(conn),
     do: Plug.Conn.put_req_header(conn, "authorization", "Bearer " <> AuthFixtures.token_for(@me))
@@ -54,15 +57,28 @@ defmodule NotificationsWeb.HistoryControllerTest do
   end
 
   test "honours limit and before, and returns the cursor of a full page", %{conn: conn} do
-    expect(RepoMock, :list_history, fn @me, @m2, 1 -> {:ok, [dm_doc(@m1)]} end)
+    expect(RepoMock, :list_history, fn @me, {@at_ms, @m2}, 1 -> {:ok, [dm_doc(@m1)]} end)
 
     body =
       conn
       |> authed()
-      |> get("/v1/notifications/history", %{"limit" => "1", "before" => @m2})
+      |> get("/v1/notifications/history", %{"limit" => "1", "before" => cursor_for(@m2)})
       |> json_response(200)
 
-    assert body["next_cursor"] == @m1
+    assert body["next_cursor"] == cursor_for(@m1)
+  end
+
+  test "accepts a cursor made of a hashed message id", %{conn: conn} do
+    hashed = "e0e2b4f0-3518-5818-8e3b-09c951ebb2bd"
+    expect(RepoMock, :list_history, fn @me, {@at_ms, ^hashed}, 5 -> {:ok, []} end)
+
+    body =
+      conn
+      |> authed()
+      |> get("/v1/notifications/history", %{"limit" => "5", "before" => cursor_for(hashed)})
+      |> json_response(200)
+
+    assert body == %{"items" => [], "next_cursor" => nil}
   end
 
   for bad <- ["0", "-1", "101", "abc", "5x", ""] do
@@ -73,7 +89,15 @@ defmodule NotificationsWeb.HistoryControllerTest do
     end
   end
 
-  for bad <- ["nope", "123", "00000000-0000-4000-8000-000000000001", ""] do
+  for bad <- [
+        "nope",
+        "123",
+        "00000000-0000-7000-8000-000000000001",
+        "-1_00000000-0000-7000-8000-000000000001",
+        "abc_00000000-0000-7000-8000-000000000001",
+        "1761912000000_nope",
+        ""
+      ] do
     test "400s for before=#{inspect(bad)}", %{conn: conn} do
       conn = conn |> authed() |> get("/v1/notifications/history", %{"before" => unquote(bad)})
 

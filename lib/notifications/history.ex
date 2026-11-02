@@ -1,5 +1,6 @@
 defmodule Notifications.History do
   alias Notifications.Settings
+  alias Notifications.UUID
   alias Notifications.Unread.{Access, Repo}
 
   @keep_forever 0
@@ -8,6 +9,7 @@ defmodule Notifications.History do
 
   @type item :: %{String.t() => String.t() | nil}
   @type page :: %{items: [item()], next_cursor: String.t() | nil}
+  @type position :: {DateTime.t(), String.t()}
 
   @spec default_limit() :: pos_integer()
   def default_limit, do: @default_limit
@@ -108,8 +110,25 @@ defmodule Notifications.History do
 
   defp visible?(_doc, _visible), do: true
 
-  defp next_cursor(docs, limit) when length(docs) == limit, do: List.last(docs)["message_id"]
+  defp next_cursor(docs, limit) when length(docs) == limit, do: encode_cursor(List.last(docs))
   defp next_cursor(_docs, _limit), do: nil
+
+  defp encode_cursor(%{"occurred_at" => %DateTime{} = at, "message_id" => message_id}),
+    do: "#{DateTime.to_unix(at, :millisecond)}_#{message_id}"
+
+  @spec decode_cursor(term()) :: {:ok, position()} | :error
+  def decode_cursor(raw) when is_binary(raw) do
+    with [millis, message_id] <- String.split(raw, "_", parts: 2),
+         {millis, ""} <- Integer.parse(millis),
+         true <- millis >= 0 and UUID.valid?(message_id),
+         {:ok, at} <- DateTime.from_unix(millis, :millisecond) do
+      {:ok, {at, message_id}}
+    else
+      _invalid -> :error
+    end
+  end
+
+  def decode_cursor(_other), do: :error
 
   defp render(doc) do
     %{
