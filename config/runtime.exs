@@ -48,5 +48,5 @@ if config_env() == :prod do
   config :notifications,
     mongo_url: System.fetch_env!("MONGO_URL"),
     rabbitmq_url: System.fetch_env!("RABBITMQ_URL"),
-    history_retention_days: String.to_integer(System.get_env("HISTORY_RETENTION_DAYS", "7"))
+    history_retention_days: String.to_integer(System.get_env("HISTORY_RETENTION_DAYS", "0"))
 end

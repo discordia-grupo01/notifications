@@ -60,7 +60,7 @@ defmodule Notifications.HistoryTest do
   end
 
   describe "record_mentions/1" do
-    test "CA1: stores one entry per mentioned user, with ids and an expiry, never the text" do
+    test "CA1: stores one entry per mentioned user, with ids only and never the text" do
       expect_settings(["u2", "u3"], [])
       capture_history()
 
@@ -76,11 +76,32 @@ defmodule Notifications.HistoryTest do
                "author_id" => "author",
                "server_id" => @s1,
                "channel_id" => @c1,
-               "occurred_at" => @at,
-               "expires_at" => DateTime.add(@at, 7 * 24 * 60 * 60, :second)
+               "occurred_at" => @at
              }
 
       assert second["_id"] == "u3:" <> @m1
+    end
+
+    test "without a configured retention the entry never expires" do
+      expect_settings(["u2"], [])
+      capture_history()
+
+      assert History.record_mentions(mention_event()) == :ok
+
+      assert_received {:history, [item]}
+      refute Map.has_key?(item, "expires_at")
+    end
+
+    test "a retention of zero days keeps the entry forever" do
+      Application.put_env(:notifications, :history_retention_days, 0)
+      on_exit(fn -> Application.delete_env(:notifications, :history_retention_days) end)
+      expect_settings(["u2"], [])
+      capture_history()
+
+      assert History.record_mentions(mention_event()) == :ok
+
+      assert_received {:history, [item]}
+      refute Map.has_key?(item, "expires_at")
     end
 
     test "the retention comes from the configuration" do
@@ -203,8 +224,7 @@ defmodule Notifications.HistoryTest do
                "message_id" => @m1,
                "author_id" => "author",
                "conversation_id" => "conv-1",
-               "occurred_at" => @at,
-               "expires_at" => DateTime.add(@at, 7 * 24 * 60 * 60, :second)
+               "occurred_at" => @at
              }
     end
 

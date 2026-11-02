@@ -2,7 +2,7 @@ defmodule Notifications.History do
   alias Notifications.Settings
   alias Notifications.Unread.{Access, Repo}
 
-  @default_retention_days 7
+  @keep_forever 0
   @default_limit 50
   @max_limit 100
 
@@ -75,18 +75,23 @@ defmodule Notifications.History do
       "kind" => kind,
       "message_id" => event.message_id,
       "author_id" => event.author_id,
-      "occurred_at" => event.occurred_at,
-      "expires_at" => DateTime.add(event.occurred_at, retention_seconds(), :second)
+      "occurred_at" => event.occurred_at
     }
+    |> put_expiry(event.occurred_at)
+  end
+
+  defp put_expiry(item, occurred_at) do
+    case retention_days() do
+      @keep_forever -> item
+      days -> Map.put(item, "expires_at", DateTime.add(occurred_at, days * 24 * 60 * 60, :second))
+    end
   end
 
   defp put([]), do: :ok
   defp put(items), do: Repo.impl().put_history(items)
 
-  defp retention_seconds do
-    days = Application.get_env(:notifications, :history_retention_days, @default_retention_days)
-    days * 24 * 60 * 60
-  end
+  defp retention_days,
+    do: Application.get_env(:notifications, :history_retention_days, @keep_forever)
 
   defp visible_channels(user_id, docs) do
     if Enum.any?(docs, &(&1["kind"] == "mention")) do

@@ -502,6 +502,16 @@ if mongo_url do
         assert ids(items) == [message_id(3), message_id(1)]
       end
 
+      test "an entry without expiry is stored and listed", %{server: s, channel: c, user: u} do
+        item = u |> mention_item(1, s, c) |> Map.delete("expires_at")
+
+        :ok = Repo.put_history([item])
+
+        assert {:ok, [stored]} = Repo.list_history(u, nil, 50)
+        assert stored["message_id"] == message_id(1)
+        refute Map.has_key?(stored, "expires_at")
+      end
+
       test "stores the entry with everything the page needs", %{server: s, channel: c, user: u} do
         :ok = Repo.put_history([mention_item(u, 1, s, c)])
 

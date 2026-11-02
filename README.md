@@ -278,8 +278,10 @@ GET /v1/notifications/history?limit=50&before=<next_cursor>
 - **Qué se oculta al leer:** las menciones de canales que el usuario ya no puede ver (perdió un rol,
   salió del servidor, el canal se borró). Al salir de un servidor o borrarse un canal/servidor, sus
   entradas también se borran.
-- **Retención:** `HISTORY_RETENTION_DAYS` días (7 por defecto), contados desde el momento del mensaje;
-  Mongo las borra solo (índice TTL en `expires_at`).
+- **Retención:** por defecto las entradas se conservan **siempre** (sin `expires_at`). Con
+  `HISTORY_RETENTION_DAYS=N` (mayor a 0) cada entrada nueva dura `N` días contados desde el momento
+  del mensaje y Mongo la borra solo (índice TTL en `expires_at`). Cambiar el valor no toca las entradas
+  ya guardadas. Aunque no haya plazo, se borran al salir del servidor o al borrarse el canal/servidor.
 - **Idempotente:** reprocesar un evento no duplica la entrada (`_id` = `usuario:mensaje`).
 - Fuera de alcance: marcar entradas como leídas y avisar en vivo que llegó una (el cliente vuelve a
   pedir la lista al abrir el centro).
@@ -356,7 +358,7 @@ Ver `.env.example`.
 | `RABBITMQ_URL` | conexión a RabbitMQ **sin barra final** (una barra es el vhost vacío y el broker rechaza la conexión) |
 | `SECRET_KEY_BASE` | clave del endpoint (obligatoria en producción) |
 | `CHECK_ORIGIN` | orígenes permitidos para el WebSocket (lista separada por comas, o `false`) |
-| `HISTORY_RETENTION_DAYS` | días que se conserva el historial de notificaciones (7 por defecto) |
+| `HISTORY_RETENTION_DAYS` | días que se conserva cada entrada del historial; `0` o sin definir = para siempre (por defecto) |
 | `LOG_LEVEL` | `debug`, `info`, `warning` o `error` |
 
 ## Logs
