@@ -257,4 +257,58 @@ defmodule Notifications.SettingsTest do
                {:ok, %{muted: false, level: nil}}
     end
   end
+
+  describe "effective_level/1" do
+    defp scope(attrs),
+      do:
+        Map.merge(
+          %{channel_muted: false, server_muted: false, channel_level: nil, server_level: nil},
+          attrs
+        )
+
+    test "falls back to the default when nothing is configured" do
+      assert Settings.effective_level(scope(%{})) == "mentions"
+    end
+
+    test "the channel level wins over the server level" do
+      assert Settings.effective_level(scope(%{channel_level: "all", server_level: "none"})) ==
+               "all"
+
+      assert Settings.effective_level(scope(%{channel_level: "none", server_level: "all"})) ==
+               "none"
+    end
+
+    test "the server level applies when the channel has none" do
+      assert Settings.effective_level(scope(%{server_level: "all"})) == "all"
+    end
+
+    test "a mute of the channel or of the server always means none" do
+      assert Settings.effective_level(scope(%{channel_muted: true, channel_level: "all"})) ==
+               "none"
+
+      assert Settings.effective_level(scope(%{server_muted: true, channel_level: "all"})) ==
+               "none"
+    end
+  end
+
+  describe "effective_level_for/3" do
+    test "reads the channel and server documents out of a user's settings" do
+      docs = [
+        doc("server", @s1, @s1, %{"level" => "none"}),
+        doc("channel", @c1, @s1, %{"level" => "all"}),
+        doc("channel", "other", @s1, %{"muted" => true})
+      ]
+
+      assert Settings.effective_level_for(docs, @c1, @s1) == "all"
+      assert Settings.effective_level_for(docs, "other", @s1) == "none"
+      assert Settings.effective_level_for(docs, "untouched", @s1) == "none"
+      assert Settings.effective_level_for([], @c1, @s1) == "mentions"
+    end
+
+    test "ignores levels it does not know" do
+      docs = [doc("server", @s1, @s1, %{"level" => "shouting"})]
+
+      assert Settings.effective_level_for(docs, @c1, @s1) == "mentions"
+    end
+  end
 end

@@ -1,6 +1,6 @@
 # notifications (Elixir)
 
-Servicio de **notificaciones** de Discordia. Cubre tres historias:
+Servicio de **notificaciones** de Discordia. Cubre cuatro historias:
 
 - **"Ver notificaciones no leídas"**: CA1 indicador de no leído por canal, CA2 indicador de no
   leído por servidor (si al menos un canal tiene no leídos) y CA3 indicador destacado para las
@@ -8,11 +8,12 @@ Servicio de **notificaciones** de Discordia. Cubre tres historias:
 - **"Silenciar notificaciones de un canal o servidor"** (HU #64): ver "Silenciar un canal o un
   servidor".
 - **"Configurar preferencias de notificación"** (HU #65): ver "Preferencias de notificación".
+- **"Centro de notificaciones con historial"** (HU #67): ver "Centro de notificaciones (historial)".
 
 El servicio **no llama a ningún otro servicio por HTTP**: todo lo que sabe lo aprende
 consumiendo eventos del bus. Lo que expone por REST es el ticket para abrir el WebSocket (ver
-"Por qué hay un endpoint HTTP") y la configuración del propio usuario (silenciados y
-preferencias).
+"Por qué hay un endpoint HTTP"), la configuración del propio usuario (silenciados y
+preferencias) y la lectura de su historial.
 
 ## Stack
 - Lenguaje: Elixir / Phoenix (Channels para WS)
@@ -79,6 +80,8 @@ se guardan acá y se piden por REST.
   `PUT /v1/notifications/settings/channels/:channel_id` -- silenciar o reactivar
   (`{"muted": true | false}`) y/o elegir el nivel de aviso
   (`{"level": "all" | "mentions" | "none" | null}`)
+- `GET /v1/notifications/history?limit=&before=` -- historial de menciones y mensajes directos,
+  del más nuevo al más viejo (ver "Centro de notificaciones (historial)")
 - WS `/notifications/socket?ticket=<ticket>`, canal `notifications:<user_id>` (solo se puede
   unir uno a su propio topic)
 
@@ -237,13 +240,60 @@ PUT /v1/notifications/settings/channels/<channel_id>
 `GET /v1/notifications/settings` mantiene `servers` y `channels` (los silenciados) y agrega
 `preferences` con los niveles fijados.
 
+### Centro de notificaciones (historial)
+
+Un solo lugar para repasar la actividad relevante sin buscarla canal por canal: **menciones** y
+**mensajes directos** recientes del usuario.
+
+```
+GET /v1/notifications/history?limit=50&before=<next_cursor>
+
+200 {
+  "items": [
+    { "kind": "mention", "message_id": "…", "author_id": "…", "occurred_at": "…",
+      "server_id": "…", "channel_id": "…", "conversation_id": null },
+    { "kind": "direct_message", "message_id": "…", "author_id": "…", "occurred_at": "…",
+      "server_id": null, "channel_id": null, "conversation_id": "…" }
+  ],
+  "next_cursor": "…"
+}
+```
+
+- **CA1 (listado cronológico con acceso directo):** `items` viene del más nuevo al más viejo
+  (los ids de mensaje son UUIDv7, que ordenan por tiempo). Cada entrada trae los ids para abrir la
+  conversación: `server_id` + `channel_id` (+ `message_id` para saltar al mensaje) en una mención y
+  `conversation_id` en un mensaje directo. El cliente resuelve nombres y contenido con lo que ya
+  tiene o con `messaging`: **el historial guarda solo ids, nunca el texto** (igual que los eventos).
+- **CA2 (historial vacío):** si no hay nada, `items` es `[]` y `next_cursor` es `null`. Mostrar el
+  aviso "no hay notificaciones" es del cliente.
+- **Paginación:** `limit` de 1 a 100 (50 por defecto) y `before` con el `next_cursor` de la página
+  anterior. `next_cursor` es `null` cuando no quedan más. Un `limit` o `before` inválido es
+  `400 INVALID_PAYLOAD`. Una página puede venir con menos entradas que `limit` (si se ocultaron
+  menciones, ver abajo) y aun así traer `next_cursor`: hay que seguir pidiendo hasta que sea `null`.
+- **Qué entra:** una mención entra si **avisa** para ese usuario según sus preferencias *en el
+  momento en que llega*: un canal silenciado, o con nivel `none` (propio o heredado del servidor),
+  no deja entrada. Las menciones ya vienen filtradas por `messaging` (solo quienes pueden ver el
+  canal, sin el autor, con `@everyone` y roles ya resueltos). Un mensaje directo entra siempre al
+  destinatario. Reactivar un canal **no** recupera lo que no se guardó mientras estaba silenciado.
+- **Qué se oculta al leer:** las menciones de canales que el usuario ya no puede ver (perdió un rol,
+  salió del servidor, el canal se borró). Al salir de un servidor o borrarse un canal/servidor, sus
+  entradas también se borran.
+- **Retención:** por defecto las entradas se conservan **siempre** (sin `expires_at`). Con
+  `HISTORY_RETENTION_DAYS=N` (mayor a 0) cada entrada nueva dura `N` días contados desde el momento
+  del mensaje y Mongo la borra solo (índice TTL en `expires_at`). Cambiar el valor no toca las entradas
+  ya guardadas. Aunque no haya plazo, se borran al salir del servidor o al borrarse el canal/servidor.
+- **Idempotente:** reprocesar un evento no duplica la entrada (`_id` = `usuario:mensaje`).
+- Fuera de alcance: marcar entradas como leídas y avisar en vivo que llegó una (el cliente vuelve a
+  pedir la lista al abrir el centro).
+
 ## Eventos que consume
 
 Una única cola durable, `notifications.unread_state`, enlazada a `discordia.events` (topic):
 
 | Routing key | Para qué |
 |---|---|
-| `messaging.message_created` | actividad del canal y menciones (no se audita: es de alto volumen) |
+| `messaging.message_created` | actividad del canal, menciones e historial (no se audita: es de alto volumen) |
+| `messaging.direct_message_created` | historial del destinatario del mensaje directo (no se audita: es de alto volumen) |
 | `servers.channel_created`, `servers.channel_deleted` | qué canales existen y de qué tipo |
 | `servers.server_deleted` | borra todo lo del servidor y deja una lápida |
 | `servers.member_joined`, `servers.member_left` | alta/baja de la membresía (y el momento de ingreso) |
@@ -292,6 +342,7 @@ Mongo ante un `resync`.
 | `event_clocks` | relojes LWW y lápidas |
 | `consumed_events` | auditoría de lo consumido |
 | `notification_settings` | `_id` = `user:canal_o_servidor`, `scope` (`server`/`channel`), `scope_id`, `server_id`, `muted`, `level` (`all`/`mentions`/`none` o `null`) |
+| `notification_history` | `_id` = `user:mensaje`, `user_id`, `kind` (`mention`/`direct_message`), `message_id`, `author_id`, `occurred_at`, `server_id`/`channel_id` o `conversation_id`, `expires_at` (TTL) |
 | `socket_tickets` | tickets de un solo uso (TTL) |
 
 Los índices se crean al arrancar (`Notifications.Unread.IndexSetup`, con reintentos).
@@ -307,6 +358,7 @@ Ver `.env.example`.
 | `RABBITMQ_URL` | conexión a RabbitMQ **sin barra final** (una barra es el vhost vacío y el broker rechaza la conexión) |
 | `SECRET_KEY_BASE` | clave del endpoint (obligatoria en producción) |
 | `CHECK_ORIGIN` | orígenes permitidos para el WebSocket (lista separada por comas, o `false`) |
+| `HISTORY_RETENTION_DAYS` | días que se conserva cada entrada del historial; `0` o sin definir = para siempre (por defecto) |
 | `LOG_LEVEL` | `debug`, `info`, `warning` o `error` |
 
 ## Logs
@@ -435,6 +487,7 @@ make ci
 
 ## Pendiente / fuera de alcance
 - Los eventos de suspensión de usuarios no se consumen (no cambian el estado de lectura).
-- Los mensajes directos (DM) no generan notificaciones: `messaging` no los publica.
+- Los mensajes directos no encienden indicadores de no leído acá (eso lo lleva `messaging`); en
+  `notifications` solo alimentan el historial.
 - Si un mensaje se edita y agrega una mención, no se vuelve a notificar.
 - Publicar la imagen y desplegarla (secrets de Docker Hub y la VM) no está en este pipeline.

@@ -164,4 +164,61 @@ defmodule NotificationsWeb.Schemas do
       required: [:servers, :channels, :preferences]
     })
   end
+
+  defmodule HistoryItem do
+    require OpenApiSpex
+
+    OpenApiSpex.schema(%{
+      title: "HistoryItem",
+      type: :object,
+      description:
+        "Una notificación del historial. Lleva solo ids (nunca el texto del mensaje): el cliente resuelve nombres y contenido con los datos que ya tiene o con messaging.",
+      properties: %{
+        kind: %Schema{
+          type: :string,
+          enum: ["mention", "direct_message"],
+          description: "`mention`: te mencionaron en un canal. `direct_message`: te escribieron."
+        },
+        message_id: %Schema{type: :string, description: "Id (UUIDv7) del mensaje."},
+        author_id: %Schema{type: :string},
+        occurred_at: %Schema{type: :string, format: :"date-time"},
+        server_id: %Schema{type: :string, nullable: true, description: "Solo en `mention`."},
+        channel_id: %Schema{
+          type: :string,
+          nullable: true,
+          description: "Canal de la mención. Solo en `mention`."
+        },
+        conversation_id: %Schema{
+          type: :string,
+          nullable: true,
+          description: "Conversación del mensaje directo. Solo en `direct_message`."
+        }
+      },
+      required: [:kind, :message_id, :author_id, :occurred_at]
+    })
+  end
+
+  defmodule HistoryPage do
+    require OpenApiSpex
+
+    OpenApiSpex.schema(%{
+      title: "HistoryPage",
+      type: :object,
+      properties: %{
+        items: %Schema{
+          type: :array,
+          description:
+            "Más nuevas primero. Una lista vacía significa que no hay notificaciones para mostrar.",
+          items: HistoryItem
+        },
+        next_cursor: %Schema{
+          type: :string,
+          nullable: true,
+          description:
+            "Pasarlo como `before` para pedir la página siguiente (más viejas). `null` cuando no hay más."
+        }
+      },
+      required: [:items, :next_cursor]
+    })
+  end
 end

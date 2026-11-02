@@ -5,6 +5,7 @@ defmodule Notifications.Settings do
   alias Notifications.Unread.{Access, Repo}
 
   @levels ~w(all mentions none)
+  @default_level "mentions"
 
   @type level :: String.t()
   @type setting :: %{muted: boolean(), level: level() | nil}
@@ -26,6 +27,32 @@ defmodule Notifications.Settings do
 
   @spec levels() :: [level()]
   def levels, do: @levels
+
+  @spec effective_level(%{
+          required(:channel_muted) => boolean(),
+          required(:server_muted) => boolean(),
+          required(:channel_level) => level() | nil,
+          required(:server_level) => level() | nil,
+          optional(atom()) => term()
+        }) :: level()
+  def effective_level(%{channel_muted: true}), do: "none"
+  def effective_level(%{server_muted: true}), do: "none"
+
+  def effective_level(%{channel_level: channel_level, server_level: server_level}),
+    do: channel_level || server_level || @default_level
+
+  @spec effective_level_for([map()], String.t(), String.t()) :: level()
+  def effective_level_for(docs, channel_id, server_id) do
+    channel_doc = Enum.find(docs, &(&1["scope_id"] == channel_id))
+    server_doc = Enum.find(docs, &(&1["scope_id"] == server_id))
+
+    effective_level(%{
+      channel_muted: muted?(channel_doc),
+      server_muted: muted?(server_doc),
+      channel_level: leveled(channel_doc),
+      server_level: leveled(server_doc)
+    })
+  end
 
   @spec list(String.t()) :: {:ok, listing()} | {:error, term()}
   def list(user_id) do
@@ -138,6 +165,8 @@ defmodule Notifications.Settings do
   defp scope_docs(docs, scope), do: Enum.filter(docs, &(&1["scope"] == scope))
   defp muted?(doc), do: is_map(doc) and doc["muted"] == true
   defp leveled?(doc), do: doc["level"] in @levels
+  defp leveled(%{"level" => level}) when level in @levels, do: level
+  defp leveled(_doc), do: nil
   defp ids(docs), do: Enum.map(docs, & &1["scope_id"])
 
   defp levels_by_id(docs),

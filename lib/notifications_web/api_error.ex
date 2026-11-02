@@ -7,6 +7,7 @@ defmodule NotificationsWeb.ApiError do
           | :ticket_unavailable
           | :unread_unavailable
           | :settings_unavailable
+          | :history_unavailable
 
   @spec describe(reason()) :: {String.t(), String.t()}
   def describe(:forbidden),
@@ -31,6 +32,11 @@ defmodule NotificationsWeb.ApiError do
       {"SETTINGS_UNAVAILABLE",
        "No se pudo acceder a la configuración de notificaciones, intentá de nuevo en un momento."}
 
+  def describe(:history_unavailable),
+    do:
+      {"HISTORY_UNAVAILABLE",
+       "No se pudo consultar el historial de notificaciones, intentá de nuevo en un momento."}
+
   @spec payload(reason(), map()) :: map()
   def payload(reason, details \\ %{}) do
     {code, message} = describe(reason)
@@ -42,6 +48,7 @@ defmodule NotificationsWeb.ApiError do
   def http_status(:channel_not_found), do: 404
   def http_status(:server_not_found), do: 404
   def http_status(:settings_unavailable), do: 503
+  def http_status(:history_unavailable), do: 503
   def http_status(:ticket_unavailable), do: 503
   def http_status(:unread_unavailable), do: 503
   def http_status(_other), do: 400
