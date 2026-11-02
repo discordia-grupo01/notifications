@@ -2,6 +2,7 @@ defmodule Notifications.Events.Lifecycle do
   require Logger
 
   alias Notifications.Events.Event
+  alias Notifications.History
   alias Notifications.Push
   alias Notifications.Unread.Repo
 
@@ -132,6 +133,7 @@ defmodule Notifications.Events.Lifecycle do
              author_id: event.author_id,
              mentioned_user_ids: event.mentioned_user_ids
            }),
+         :ok <- History.record_mentions(event),
          :ok <-
            Push.publish("server:" <> event.server_id, "message_created", %{
              "server_id" => event.server_id,
@@ -146,6 +148,17 @@ defmodule Notifications.Events.Lifecycle do
       )
     else
       other -> outcome(other, "messaging.message_created")
+    end
+  end
+
+  def handle(%Event.DirectMessageCreated{} = event) do
+    with :ok <- History.record_direct(event) do
+      Logger.debug("direct_message_recorded",
+        conversation_id: event.conversation_id,
+        message_id: event.message_id
+      )
+    else
+      other -> outcome(other, "messaging.direct_message_created")
     end
   end
 

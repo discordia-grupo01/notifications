@@ -70,6 +70,25 @@ defmodule Notifications.Events.Event do
     ]
   end
 
+  defmodule DirectMessageCreated do
+    @enforce_keys [
+      :event_id,
+      :occurred_at,
+      :conversation_id,
+      :message_id,
+      :author_id,
+      :recipient_id
+    ]
+    defstruct [
+      :event_id,
+      :occurred_at,
+      :conversation_id,
+      :message_id,
+      :author_id,
+      :recipient_id
+    ]
+  end
+
   @routing_keys [
     {"servers.channel_created", ChannelCreated},
     {"servers.channel_deleted", ChannelDeleted},
@@ -81,7 +100,8 @@ defmodule Notifications.Events.Event do
     {"servers.member_roles_updated", MemberRolesUpdated},
     {"servers.channel_overrides_updated", ChannelOverridesUpdated},
     {"servers.owner_updated", OwnerUpdated},
-    {"messaging.message_created", MessageCreated}
+    {"messaging.message_created", MessageCreated},
+    {"messaging.direct_message_created", DirectMessageCreated}
   ]
 
   @spec routing_keys() :: [String.t()]
@@ -145,6 +165,9 @@ defmodule Notifications.Events.Event do
       {:ok, Map.put(base, :overrides, overrides)}
     end
   end
+
+  defp fields(DirectMessageCreated, payload),
+    do: strings(payload, ~w(event_id conversation_id message_id author_id recipient_id)a)
 
   defp fields(MessageCreated, payload) do
     with {:ok, base} <- strings(payload, ~w(event_id server_id channel_id message_id author_id)a),

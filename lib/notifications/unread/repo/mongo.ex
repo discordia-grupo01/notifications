@@ -8,6 +8,7 @@ defmodule Notifications.Unread.Repo.Mongo do
   @read_markers "read_markers"
   @mention_markers "mention_markers"
   @settings "notification_settings"
+  @history "notification_history"
   @replica_servers "replica_servers"
   @replica_roles "replica_roles"
   @replica_members "replica_members"
@@ -40,6 +41,13 @@ defmodule Notifications.Unread.Repo.Mongo do
       [name: "event_clocks_expires_at_ttl", key: [expires_at: 1], expireAfterSeconds: 0]
     ]
 
+    history_indexes = [
+      [name: "by_user_recent", key: [user_id: 1, message_id: -1]],
+      [name: "history_expires_at_ttl", key: [expires_at: 1], expireAfterSeconds: 0],
+      [name: "by_channel", key: [channel_id: 1]],
+      [name: "by_server", key: [server_id: 1]]
+    ]
+
     with :ok <- Mongo.create_indexes(@conn, @channels, by_server),
          :ok <- Mongo.create_indexes(@conn, @activity, by_server),
          :ok <- Mongo.create_indexes(@conn, @read_markers, by_user ++ by_user_server),
@@ -52,6 +60,7 @@ defmodule Notifications.Unread.Repo.Mongo do
              replica_ttl ++ by_server ++ [[name: "by_user", key: [user_id: 1]]]
            ),
          :ok <- Mongo.create_indexes(@conn, @settings, settings_indexes),
+         :ok <- Mongo.create_indexes(@conn, @history, history_indexes),
          :ok <- Mongo.create_indexes(@conn, @replica_overrides, by_server) do
       Mongo.create_indexes(@conn, @clocks, clock_ttl)
     end
@@ -97,6 +106,7 @@ defmodule Notifications.Unread.Repo.Mongo do
          {:ok, _result} <-
            Mongo.delete_many(@conn, @mention_markers, %{"channel_id" => channel_id}),
          {:ok, _result} <- Mongo.delete_many(@conn, @settings, %{"scope_id" => channel_id}),
+         {:ok, _result} <- Mongo.delete_many(@conn, @history, %{"channel_id" => channel_id}),
          {:ok, _result} <- Mongo.delete_one(@conn, @replica_overrides, %{"_id" => channel_id}),
          {:ok, _result} <- Mongo.delete_one(@conn, @channels, %{"_id" => channel_id}) do
       :ok
@@ -116,6 +126,7 @@ defmodule Notifications.Unread.Repo.Mongo do
          {:ok, _result} <- Mongo.delete_many(@conn, @read_markers, by_server),
          {:ok, _result} <- Mongo.delete_many(@conn, @mention_markers, by_server),
          {:ok, _result} <- Mongo.delete_many(@conn, @settings, by_server),
+         {:ok, _result} <- Mongo.delete_many(@conn, @history, by_server),
          {:ok, _result} <- Mongo.delete_many(@conn, @replica_overrides, by_server),
          {:ok, _result} <- Mongo.delete_many(@conn, @replica_members, by_server),
          {:ok, _result} <- Mongo.delete_many(@conn, @replica_roles, by_server),
@@ -192,7 +203,9 @@ defmodule Notifications.Unread.Repo.Mongo do
              "server_id" => server_id
            }),
          {:ok, _result} <-
-           Mongo.delete_many(@conn, @settings, %{"user_id" => user_id, "server_id" => server_id}) do
+           Mongo.delete_many(@conn, @settings, %{"user_id" => user_id, "server_id" => server_id}),
+         {:ok, _result} <-
+           Mongo.delete_many(@conn, @history, %{"user_id" => user_id, "server_id" => server_id}) do
       {:ok, :applied}
     end
   end
@@ -349,6 +362,37 @@ defmodule Notifications.Unread.Repo.Mongo do
            }) do
       :ok
     end
+  end
+
+  @impl true
+  def list_settings_for(user_ids, scope_ids),
+    do:
+      list(@settings, %{
+        "user_id" => %{"$in" => user_ids},
+        "scope_id" => %{"$in" => scope_ids}
+      })
+
+  @impl true
+  def put_history(items) do
+    operations =
+      Enum.map(items, fn %{"_id" => id} = item ->
+        {id, %{"$setOnInsert" => Map.delete(item, "_id")}}
+      end)
+
+    upsert_many(@history, operations)
+  end
+
+  @impl true
+  def list_history(user_id, before, limit) do
+    filter = %{"user_id" => user_id}
+    filter = if before, do: Map.put(filter, "message_id", %{"$lt" => before}), else: filter
+
+    case Mongo.find(@conn, @history, filter, sort: %{"message_id" => -1}, limit: limit) do
+      {:error, reason} -> {:error, reason}
+      cursor -> {:ok, Enum.to_list(cursor)}
+    end
+  rescue
+    error -> {:error, error}
   end
 
   defp ensure_channel(channel_id, server_id) do

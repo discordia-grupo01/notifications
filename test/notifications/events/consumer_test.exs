@@ -437,6 +437,118 @@ if rabbitmq_url && mongo_url do
       end
     end
 
+    test "CA1: a mention ends up in the history of whoever was mentioned", ctx do
+      %{chan: chan, server: server, channel: channel, me: me, other: other} = ctx
+      seed_membership(ctx)
+      message_id = later(10)
+
+      publish(chan, "messaging.message_created", %{
+        "server_id" => server,
+        "channel_id" => channel,
+        "message_id" => message_id,
+        "author_id" => other,
+        "mentioned_user_ids" => [me]
+      })
+
+      assert wait_until(fn -> history_ids(me) == [message_id] end)
+
+      assert {:ok, %{items: [item]}} = Notifications.History.list(me)
+      assert item["kind"] == "mention"
+      assert item["channel_id"] == channel
+      assert item["server_id"] == server
+      assert item["author_id"] == other
+    end
+
+    test "CA1: a direct message ends up in the history of its recipient, with no server involved",
+         ctx do
+      %{chan: chan, me: me, other: other} = ctx
+      message_id = later(10)
+
+      publish(chan, "messaging.direct_message_created", %{
+        "conversation_id" => "conv-" <> me,
+        "message_id" => message_id,
+        "author_id" => other,
+        "recipient_id" => me
+      })
+
+      assert wait_until(fn -> history_ids(me) == [message_id] end)
+
+      assert {:ok, %{items: [item]}} = Notifications.History.list(me)
+      assert item["kind"] == "direct_message"
+      assert item["conversation_id"] == "conv-" <> me
+      assert history_ids(other) == []
+    end
+
+    test "the history lists the newest first", ctx do
+      %{chan: chan, me: me, other: other} = ctx
+      older = later(10)
+      newer = later(20)
+
+      for message_id <- [older, newer] do
+        publish(chan, "messaging.direct_message_created", %{
+          "conversation_id" => "conv-" <> me,
+          "message_id" => message_id,
+          "author_id" => other,
+          "recipient_id" => me
+        })
+      end
+
+      assert wait_until(fn -> history_ids(me) == [newer, older] end)
+    end
+
+    test "a muted channel leaves no entry for the mention, a plain one does", ctx do
+      %{chan: chan, server: server, channel: channel, me: me, other: other} = ctx
+      seed_membership(ctx)
+
+      assert {:ok, %{muted: true}} =
+               Notifications.Settings.update_channel(me, channel, %{muted: true})
+
+      publish(chan, "messaging.message_created", %{
+        "server_id" => server,
+        "channel_id" => channel,
+        "message_id" => later(10),
+        "author_id" => other,
+        "mentioned_user_ids" => [me]
+      })
+
+      direct = later(20)
+
+      publish(chan, "messaging.direct_message_created", %{
+        "conversation_id" => "conv-" <> me,
+        "message_id" => direct,
+        "author_id" => other,
+        "recipient_id" => me
+      })
+
+      assert wait_until(fn -> history_ids(me) == [direct] end)
+    end
+
+    test "the same event delivered twice leaves a single entry", ctx do
+      %{chan: chan, me: me, other: other} = ctx
+      message_id = later(10)
+
+      payload = %{
+        "conversation_id" => "conv-" <> me,
+        "message_id" => message_id,
+        "author_id" => other,
+        "recipient_id" => me
+      }
+
+      publish(chan, "messaging.direct_message_created", payload)
+      publish(chan, "messaging.direct_message_created", payload)
+
+      assert wait_until(fn -> history_ids(me) == [message_id] end)
+      Process.sleep(300)
+      assert history_ids(me) == [message_id]
+    end
+
+    defp history_ids(user) do
+      case Notifications.History.list(user) do
+        {:ok, %{items: items}} -> Enum.map(items, & &1["message_id"])
+        {:error, _reason} -> nil
+      end
+    end
+
     defp audit(event_id),
       do: Mongo.find_one(Notifications.Mongo, "consumed_events", %{"_id" => event_id})
 

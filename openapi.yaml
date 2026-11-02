@@ -60,6 +60,80 @@ components:
       type: object
       x-struct: Elixir.NotificationsWeb.Schemas.ErrorResponse
       x-validate:
+    HistoryItem:
+      description: 'Una notificación del historial. Lleva solo ids (nunca el texto del mensaje): el cliente resuelve nombres y contenido con los datos que ya tiene o con messaging.'
+      properties:
+        author_id:
+          type: string
+          x-struct:
+          x-validate:
+        channel_id:
+          description: Canal de la mención. Solo en `mention`.
+          nullable: true
+          type: string
+          x-struct:
+          x-validate:
+        conversation_id:
+          description: Conversación del mensaje directo. Solo en `direct_message`.
+          nullable: true
+          type: string
+          x-struct:
+          x-validate:
+        kind:
+          description: '`mention`: te mencionaron en un canal. `direct_message`: te escribieron.'
+          enum:
+            - mention
+            - direct_message
+          type: string
+          x-struct:
+          x-validate:
+        message_id:
+          description: Id (UUIDv7) del mensaje.
+          type: string
+          x-struct:
+          x-validate:
+        occurred_at:
+          format: date-time
+          type: string
+          x-struct:
+          x-validate:
+        server_id:
+          description: Solo en `mention`.
+          nullable: true
+          type: string
+          x-struct:
+          x-validate:
+      required:
+        - kind
+        - message_id
+        - author_id
+        - occurred_at
+      title: HistoryItem
+      type: object
+      x-struct: Elixir.NotificationsWeb.Schemas.HistoryItem
+      x-validate:
+    HistoryPage:
+      properties:
+        items:
+          description: Más nuevas primero. Una lista vacía significa que no hay notificaciones para mostrar.
+          items:
+            $ref: '#/components/schemas/HistoryItem'
+          type: array
+          x-struct:
+          x-validate:
+        next_cursor:
+          description: Pasarlo como `before` para pedir la página siguiente (más viejas). `null` cuando no hay más.
+          nullable: true
+          type: string
+          x-struct:
+          x-validate:
+      required:
+        - items
+        - next_cursor
+      title: HistoryPage
+      type: object
+      x-struct: Elixir.NotificationsWeb.Schemas.HistoryPage
+      x-validate:
     ServerSetting:
       properties:
         level:
@@ -304,6 +378,56 @@ paths:
       summary: Readiness -- confirma que el servicio puede operar (pinguea Mongo)
       tags:
         - ops
+  /v1/notifications/history:
+    get:
+      callbacks: {}
+      description: Menciones y mensajes directos recientes, ordenados del más nuevo al más viejo, con los ids para ir directo a cada conversación. Solo incluye lo que avisó según las preferencias del momento (un canal silenciado o en `none` no deja entradas) y se conserva `HISTORY_RETENTION_DAYS` días (7 por defecto). Las menciones de canales que el usuario ya no puede ver no se listan. Si no hay nada, `items` viene vacío.
+      operationId: NotificationsWeb.HistoryController.index
+      parameters:
+        - description: Cantidad de entradas, de 1 a 100. Por defecto 50.
+          in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            x-struct:
+            x-validate:
+        - description: '`next_cursor` de la página anterior: trae las entradas más viejas.'
+          in: query
+          name: before
+          required: false
+          schema:
+            type: string
+            x-struct:
+            x-validate:
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryPage'
+          description: Página del historial
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: '`limit` o `before` inválido'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: 'Falta o es inválido el Authorization: Bearer <jwt>'
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: No se pudo leer el historial
+      summary: Historial de notificaciones del usuario
+      tags:
+        - history
   /v1/notifications/settings:
     get:
       callbacks: {}

@@ -14,7 +14,7 @@ defmodule Notifications.Events.EventTest do
                servers.member_joined servers.member_left servers.role_updated
                servers.role_deleted servers.member_roles_updated
                servers.channel_overrides_updated servers.owner_updated
-               messaging.message_created
+               messaging.message_created messaging.direct_message_created
              ))
   end
 
@@ -37,6 +37,43 @@ defmodule Notifications.Events.EventTest do
               mentioned_user_ids: ["u2", "u3"],
               occurred_at: %DateTime{}
             }} = Event.parse("messaging.message_created", payload)
+  end
+
+  test "parses messaging.direct_message_created" do
+    payload =
+      base(%{
+        "conversation_id" => "conv-1",
+        "message_id" => "m1",
+        "author_id" => "u1",
+        "recipient_id" => "u2"
+      })
+
+    assert {:ok,
+            %Event.DirectMessageCreated{
+              conversation_id: "conv-1",
+              message_id: "m1",
+              author_id: "u1",
+              recipient_id: "u2",
+              occurred_at: %DateTime{}
+            }} = Event.parse("messaging.direct_message_created", payload)
+  end
+
+  test "messaging.direct_message_created needs every id" do
+    payload =
+      base(%{
+        "conversation_id" => "conv-1",
+        "message_id" => "m1",
+        "author_id" => "u1",
+        "recipient_id" => "u2"
+      })
+
+    for key <- ~w(conversation_id message_id author_id recipient_id) do
+      assert Event.parse("messaging.direct_message_created", Map.delete(payload, key)) ==
+               {:error, :invalid_payload}
+
+      assert Event.parse("messaging.direct_message_created", Map.put(payload, key, "")) ==
+               {:error, :invalid_payload}
+    end
   end
 
   test "parses every servers.* event" do

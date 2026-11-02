@@ -67,6 +67,15 @@ defmodule Notifications.Unread.Repo do
               changes :: setting_changes()
             ) :: result()
 
+  @callback list_settings_for(user_ids :: [String.t()], scope_ids :: [String.t()]) ::
+              {:ok, [map()]} | {:error, term()}
+  @callback put_history(items :: [map()]) :: result()
+  @callback list_history(
+              user_id :: String.t(),
+              before :: String.t() | nil,
+              limit :: pos_integer()
+            ) :: {:ok, [map()]} | {:error, term()}
+
   @spec impl() :: module()
   def impl, do: Application.get_env(:notifications, :unread_repo, Notifications.Unread.Repo.Mongo)
 end
