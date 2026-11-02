@@ -3,7 +3,6 @@ defmodule Notifications.Unread do
   alias Notifications.Settings
   alias Notifications.Unread.{Access, Repo, State}
 
-  @uuid_v7 ~r/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @max_future_seconds 60
 
   @spec mongo_ready?() :: boolean()
@@ -79,7 +78,7 @@ defmodule Notifications.Unread do
   defp validate_message_id(id) when id in [nil, ""], do: {:ok, nil}
 
   defp validate_message_id(id) when is_binary(id) do
-    if Regex.match?(@uuid_v7, id) and id <= future_limit(),
+    if UUID.v7?(id) and id <= future_limit(),
       do: {:ok, id},
       else: {:error, :invalid_payload}
   end

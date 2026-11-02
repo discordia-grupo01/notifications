@@ -1,4 +1,6 @@
 defmodule Notifications.Unread.State do
+  alias Notifications.Settings
+
   @type channel :: %{
           server_id: String.t(),
           baseline: String.t(),
@@ -12,8 +14,6 @@ defmodule Notifications.Unread.State do
   @type t :: %{String.t() => channel()}
   @type flags :: %{unread: boolean(), mention: boolean(), notify: boolean(), muted: boolean()}
   @type settings :: Notifications.Settings.scopes()
-
-  @default_level "mentions"
 
   @spec build([map()], %{String.t() => String.t()}, map(), map()) :: t()
   def build(visible, activity, reads, mentions) do
@@ -151,7 +151,7 @@ defmodule Notifications.Unread.State do
 
   defp flags(%{baseline: baseline, last_message_id: last, last_mention_id: mention} = channel) do
     muted? = channel.channel_muted or channel.server_muted
-    level = effective_level(channel, muted?)
+    level = Settings.effective_level(channel)
     mentioned? = is_binary(mention) and mention > baseline
     unread? = mentioned? or (is_binary(last) and last > baseline)
     mention? = mentioned? and level != "none"
@@ -163,11 +163,6 @@ defmodule Notifications.Unread.State do
       muted: muted?
     }
   end
-
-  defp effective_level(_channel, true), do: "none"
-
-  defp effective_level(channel, false),
-    do: channel.channel_level || channel.server_level || @default_level
 
   defp muted_scopes(state) do
     channels = Map.values(state)
