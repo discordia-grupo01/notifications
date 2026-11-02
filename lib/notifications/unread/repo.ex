@@ -72,7 +72,7 @@ defmodule Notifications.Unread.Repo do
   @callback put_history(items :: [map()]) :: result()
   @callback list_history(
               user_id :: String.t(),
-              before :: String.t() | nil,
+              before :: {DateTime.t(), String.t()} | nil,
               limit :: pos_integer()
             ) :: {:ok, [map()]} | {:error, term()}
 

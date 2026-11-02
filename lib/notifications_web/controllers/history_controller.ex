@@ -4,7 +4,7 @@ defmodule NotificationsWeb.HistoryController do
 
   require Logger
 
-  alias Notifications.{History, Log, UUID}
+  alias Notifications.{History, Log}
   alias NotificationsWeb.{ApiError, Schemas}
 
   @max_limit History.max_limit()
@@ -14,7 +14,7 @@ defmodule NotificationsWeb.HistoryController do
   operation :index,
     summary: "Historial de notificaciones del usuario",
     description:
-      "Menciones y mensajes directos recientes, ordenados del más nuevo al más viejo, con los ids para ir directo a cada conversación. Solo incluye lo que avisó según las preferencias del momento (un canal silenciado o en `none` no deja entradas) y se conserva `HISTORY_RETENTION_DAYS` días (7 por defecto). Las menciones de canales que el usuario ya no puede ver no se listan. Si no hay nada, `items` viene vacío.",
+      "Menciones y mensajes directos recientes, ordenados por fecha, del más nuevo al más viejo, con los ids para ir directo a cada conversación. Solo incluye lo que avisó según las preferencias del momento (un canal silenciado o en `none` no deja entradas) y se conserva para siempre, salvo que `HISTORY_RETENTION_DAYS` fije un plazo en días. Las menciones de canales que el usuario ya no puede ver no se listan. Si no hay nada, `items` viene vacío.",
     parameters: [
       limit: [
         in: :query,
@@ -26,7 +26,8 @@ defmodule NotificationsWeb.HistoryController do
         in: :query,
         type: :string,
         required: false,
-        description: "`next_cursor` de la página anterior: trae las entradas más viejas."
+        description:
+          "`next_cursor` de la página anterior (texto opaco, se reenvía tal cual): trae las entradas más viejas."
       ]
     ],
     responses: [
@@ -72,7 +73,10 @@ defmodule NotificationsWeb.HistoryController do
   defp parse_limit(_params), do: {:ok, History.default_limit()}
 
   defp parse_before(%{"before" => before}) do
-    if UUID.v7?(before), do: {:ok, before}, else: {:error, :invalid_payload}
+    case History.decode_cursor(before) do
+      {:ok, position} -> {:ok, position}
+      :error -> {:error, :invalid_payload}
+    end
   end
 
   defp parse_before(_params), do: {:ok, nil}
