@@ -12,6 +12,23 @@ defmodule Notifications.Delivery.Content do
   @type t :: %{title: String.t(), body: String.t(), data: map()}
 
   @spec build(struct()) :: {:ok, t()} | {:error, term()}
+  def build(%Event.PrivateCall{} = event) do
+    with {:ok, caller} <- user_name(event.caller_id) do
+      {:ok,
+       %{
+         title: "Llamada de voz",
+         body: call_body(caller, event.status),
+         data: %{
+           "call_id" => event.call_id,
+           "conversation_id" => event.conversation_id,
+           "caller_id" => event.caller_id,
+           "recipient_id" => event.recipient_id,
+           "status" => event.status
+         }
+       }}
+    end
+  end
+
   def build(%{conversation_id: conversation_id} = event) do
     with {:ok, author} <- user_name(event.author_id) do
       {:ok,
@@ -39,6 +56,12 @@ defmodule Notifications.Delivery.Content do
   end
 
   def build(%{server_id: _server_id, channel_id: _channel_id} = event), do: build_channel(event)
+
+  defp call_body(caller, "ringing"), do: "#{caller} te está llamando"
+  defp call_body(_caller, "missed"), do: "La llamada de voz no fue respondida"
+  defp call_body(_caller, "rejected"), do: "La llamada de voz fue rechazada"
+  defp call_body(_caller, "ended"), do: "La llamada de voz finalizó"
+  defp call_body(_caller, _status), do: "Actualización de llamada de voz"
 
   defp build_channel(%{server_id: server_id, channel_id: channel_id} = event) do
     with {:ok, author} <- user_name(event.author_id),

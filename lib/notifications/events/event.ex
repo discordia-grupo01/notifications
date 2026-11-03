@@ -135,6 +135,27 @@ defmodule Notifications.Events.Event do
     defstruct [:event_id, :occurred_at, :user_id, :connections, :do_not_disturb, :version]
   end
 
+  defmodule PrivateCall do
+    @enforce_keys [
+      :event_id,
+      :occurred_at,
+      :call_id,
+      :conversation_id,
+      :caller_id,
+      :recipient_id,
+      :status
+    ]
+    defstruct [
+      :event_id,
+      :occurred_at,
+      :call_id,
+      :conversation_id,
+      :caller_id,
+      :recipient_id,
+      :status
+    ]
+  end
+
   @routing_keys [
     {"servers.channel_created", ChannelCreated},
     {"servers.channel_deleted", ChannelDeleted},
@@ -152,7 +173,8 @@ defmodule Notifications.Events.Event do
     {"messaging.message_deleted", MessageDeleted},
     {"users.profile_updated", UserProfileUpdated},
     {"servers.server_updated", ServerUpdated},
-    {"messaging.user_presence_changed", UserPresenceChanged}
+    {"messaging.user_presence_changed", UserPresenceChanged},
+    {"voice.private_call", PrivateCall}
   ]
 
   @connections ~w(active idle none)
@@ -271,6 +293,13 @@ defmodule Notifications.Events.Event do
       {:ok, base |> Map.put(:do_not_disturb, dnd) |> Map.put(:version, version)}
     else
       _invalid -> {:error, :invalid_payload}
+    end
+  end
+
+  defp fields(PrivateCall, payload) do
+    with {:ok, base} <-
+           strings(payload, ~w(event_id call_id conversation_id caller_id recipient_id status)a) do
+      {:ok, base}
     end
   end
 

@@ -2,7 +2,17 @@ defmodule Notifications.Delivery.Recipients do
   alias Notifications.Settings
   alias Notifications.Unread.{Access, Repo}
 
-  @type kind :: :mention | :message | :direct
+  @type kind :: :mention | :message | :direct | :call
+
+  @spec for_private_call(map()) :: {:ok, %{String.t() => kind()}}
+  def for_private_call(%{status: "ringing", recipient_id: recipient_id}),
+    do: {:ok, %{recipient_id => :call}}
+
+  def for_private_call(%{caller_id: caller_id, status: status})
+      when status in ["rejected", "missed", "ended"],
+      do: {:ok, %{caller_id => :call}}
+
+  def for_private_call(_event), do: {:ok, %{}}
 
   @spec for_channel_message(map()) :: {:ok, %{String.t() => kind()}} | {:error, term()}
   def for_channel_message(%{channel_id: channel_id, server_id: server_id} = event) do
