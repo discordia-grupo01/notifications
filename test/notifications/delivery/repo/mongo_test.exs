@@ -101,16 +101,17 @@ if mongo_url do
 
     describe "devices" do
       test "registers a device with an opaque id and does not repeat it" do
-        assert {:ok, %{id: id, created: true}} = Repo.put_device("u1", attrs("a"), 10)
+        assert {:ok, %{id: id, created: true}} = Repo.put_device("u1", attrs("secret-token"), 10)
         assert byte_size(id) >= 20
-        refute id =~ "a"
+        refute id =~ "secret-token"
 
-        assert Repo.put_device("u1", attrs("a"), 10) == {:ok, %{id: id, created: false}}
+        assert Repo.put_device("u1", attrs("secret-token"), 10) ==
+                 {:ok, %{id: id, created: false}}
 
         assert {:ok, [device]} = Repo.list_devices(["u1"])
         assert device["_id"] == id
         assert device["provider"] == "expo"
-        assert device["credential"] == %{"token" => "a"}
+        assert device["credential"] == %{"token" => "secret-token"}
         assert %DateTime{} = device["created_at"]
       end
 
