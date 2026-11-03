@@ -9,9 +9,11 @@ Servicio de **notificaciones** de Discordia. Cubre cuatro historias:
   servidor".
 - **"Configurar preferencias de notificación"** (HU #65): ver "Preferencias de notificación".
 - **"Centro de notificaciones con historial"** (HU #67): ver "Centro de notificaciones (historial)".
+- **"Notificaciones push"** (HU #66): ver "Notificaciones push".
 
 El servicio **no llama a ningún otro servicio por HTTP**: todo lo que sabe lo aprende
-consumiendo eventos del bus. Lo que expone por REST es el ticket para abrir el WebSocket (ver
+consumiendo eventos del bus (lo único que sale hacia afuera son los envíos a los servicios de
+push, ver "Notificaciones push"). Lo que expone por REST es el ticket para abrir el WebSocket (ver
 "Por qué hay un endpoint HTTP"), la configuración del propio usuario (silenciados y
 preferencias) y la lectura de su historial.
 
@@ -240,6 +242,77 @@ PUT /v1/notifications/settings/channels/<channel_id>
 `GET /v1/notifications/settings` mantiene `servers` y `channels` (los silenciados) y agrega
 `preferences` con los niveles fijados.
 
+### Notificaciones push
+
+Avisa por fuera de la app (HU #66). Dos proveedores: **Web Push** (VAPID, para el navegador) y
+**Expo Push Service** (para la app móvil; Android primero, iOS necesita una cuenta de Apple
+Developer).
+
+**Quién recibe un push** (se calcula con los mismos silenciados y niveles que el historial):
+
+| Mensaje | Recibe push |
+|---|---|
+| Directo | Siempre el destinatario (si hay bloqueo, `messaging` ni siquiera lo envía). |
+| En un canal, con mención | El mencionado, salvo canal o servidor silenciado o nivel `none`. |
+| En un canal, sin mención | Solo quien tiene el nivel efectivo `all`, si además puede ver el canal. |
+
+El autor nunca recibe el suyo, y silenciar siempre gana. Además se descartan:
+
+- **Quien apagó el push** (`PUT /v1/notifications/push/settings`): un interruptor único, válido
+  para todos sus dispositivos. No toca los indicadores ni el historial dentro de la app.
+- **Quien tiene la app abierta**: `messaging` publica `messaging.user_presence_changed` cuando
+  cambia su estado (conexión activa, inactiva o ninguna, y "No molestar"). Se guarda una réplica y
+  no se manda push si hay una conexión **activa** en cualquier dispositivo, o si está en "No
+  molestar". Inactiva (5 minutos sin interacción) o sin conexión recibe el push. Si no hay dato, o
+  venció (6 horas), se asume app cerrada: se prefiere un aviso de más a perder uno.
+
+**Qué dice el push.** Canal: título `Servidor - Canal`, cuerpo `Nombre: mensaje`. Directo: título
+`Mensaje directo`, cuerpo `Nombre: mensaje`. El texto llega cortado (unos 140 caracteres) en el
+propio evento y **no se guarda**; los nombres salen de réplicas alimentadas por
+`users.profile_updated` y `servers.server_updated` (si faltan, "Usuario" y "Servidor"). El payload
+incluye ids para abrir el lugar correcto: `kind` (`mention`, `message` o `direct_message`),
+`message_id`, `author_id` y `server_id` + `channel_id` o `conversation_id`.
+
+**Dispositivos** (el token viaja solo en el cuerpo, nunca en la URL ni en los logs):
+
+| Método y ruta | Qué hace |
+|---|---|
+| `POST /v1/notifications/push/devices` | Registra el dispositivo. `201 {id}` si es nuevo, `200 {id}` si ya estaba (pasa al usuario actual si estaba a nombre de otro). `409 DEVICE_LIMIT` pasados los 10 por usuario. |
+| `DELETE /v1/notifications/push/devices/:id` | Lo quita (`204`, idempotente). El `id` es opaco, no contiene el token. |
+| `GET` / `PUT /v1/notifications/push/settings` | Interruptor `{"enabled": bool}` (por defecto `true`). |
+| `GET /v1/notifications/push/vapid-public-key` | Clave pública VAPID para `pushManager.subscribe` (`404` si el push web no está configurado). |
+
+Cuerpo de registro: app `{"provider": "expo", "platform": "android" | "ios", "token":
+"ExponentPushToken[...]"}`; navegador `{"provider": "webpush", "platform": "web", "endpoint": "...",
+"p256dh": "...", "auth": "..."}`. El `endpoint` debe ser https de un servicio conocido
+(`PUSH_ALLOWED_HOSTS`), para que nadie nos haga llamar a una dirección cualquiera.
+
+**Cómo se envía.** El consumidor no espera a los servicios de push: arma el mensaje y lo deja en
+tareas en segundo plano con tope (`max_concurrency`, 50); si hay demasiadas en vuelo se descartan
+y se loguea. Por dispositivo: se reserva `evento + dispositivo` (colección `push_deliveries`, TTL
+de 24 h) para no mandar dos veces si RabbitMQ repite el evento; `404`/`410` de Web Push y
+`DeviceNotRegistered` de Expo borran el dispositivo; `429`/`5xx`/red se reintentan 3 veces con
+espera creciente (respeta `Retry-After`); el resto queda anotado en `last_error`. Un fallo de push
+**nunca** hace reintentar el evento, que ya cumplió con el no leído y el historial. Como la reserva
+va antes del envío, si el nodo se cae justo en medio se pierde ese push (a lo sumo uno por
+dispositivo), no se duplica.
+
+**Editar y borrar.** Al editar un mensaje de canal, `notifications` compara las menciones nuevas con
+las entradas que ya tiene del mensaje: quien queda mencionado y no tenía entrada la recibe (si su
+silenciado y nivel lo permiten) y además le llega un push con `(editado)` al final del cuerpo y
+`edited: true` en el payload; a quien dejó de estar mencionado se le quita la entrada; los demás no
+se tocan, así que nadie recibe dos avisos por el mismo mensaje. Al borrar un mensaje (de canal o
+directo) se borran sus entradas de todos los historiales. Un push que ya salió no se puede retirar.
+
+**Qué no cubre.** No agrupa ni limita avisos (cada mensaje, un push). Las reacciones no generan push
+ni entrada. Editar el texto de un mensaje directo no hace nada (no tiene menciones) y las pantallas
+abiertas no se enteran en vivo de una entrada que aparece o desaparece por una edición o un borrado
+hasta que recargan el centro de notificaciones. Los recibos de
+entrega de Expo (errores de FCM posteriores al envío) no se consultan. Las credenciales de los
+dispositivos se guardan sin cifrar en Mongo.
+
+Para generar las claves VAPID: `mix push.gen_vapid`.
+
 ### Centro de notificaciones (historial)
 
 Un solo lugar para repasar la actividad relevante sin buscarla canal por canal: **menciones** y
@@ -294,6 +367,11 @@ Una única cola durable, `notifications.unread_state`, enlazada a `discordia.eve
 |---|---|
 | `messaging.message_created` | actividad del canal, menciones e historial (no se audita: es de alto volumen) |
 | `messaging.direct_message_created` | historial del destinatario del mensaje directo (no se audita: es de alto volumen) |
+| `messaging.message_updated` | edición de un mensaje de canal: agrega la entrada de quien quedó mencionado (y le manda un push "editado") y quita la de quien dejó de estarlo (no se audita: lleva texto) |
+| `messaging.message_deleted` | borra de todos los historiales las entradas que apuntan al mensaje |
+| `messaging.user_presence_changed` | réplica de si el usuario tiene la app abierta, para decidir el push (no se audita) |
+| `users.profile_updated` | nombre del autor para el texto del push (solo `user_id`, `name` y `version`; no se audita) |
+| `servers.server_updated` | nombre del servidor para el título del push |
 | `servers.channel_created`, `servers.channel_deleted` | qué canales existen y de qué tipo |
 | `servers.server_deleted` | borra todo lo del servidor y deja una lápida |
 | `servers.member_joined`, `servers.member_left` | alta/baja de la membresía (y el momento de ingreso) |
@@ -344,6 +422,11 @@ Mongo ante un `resync`.
 | `notification_settings` | `_id` = `user:canal_o_servidor`, `scope` (`server`/`channel`), `scope_id`, `server_id`, `muted`, `level` (`all`/`mentions`/`none` o `null`) |
 | `notification_history` | `_id` = `user:mensaje`, `user_id`, `kind` (`mention`/`direct_message`), `message_id`, `author_id`, `occurred_at`, `server_id`/`channel_id` o `conversation_id`, `expires_at` (TTL) |
 | `socket_tickets` | tickets de un solo uso (TTL) |
+| `replica_user_names`, `replica_server_names` | nombre por `user_id` (última `version`) y por `server_id` (último `occurred_at`) |
+| `replica_presence` | `_id` = usuario, `connections` (`active`/`idle`/`none`), `do_not_disturb`, `version`, `expires_at` (TTL) |
+| `push_settings` | `_id` = usuario, `enabled` (si no hay documento, está activado) |
+| `push_devices` | `_id` opaco, `user_id`, `provider`, `platform`, `credential`, `credential_hash` (único), `created_at`, `last_used_at`, `last_error` |
+| `push_deliveries` | `_id` = `evento:dispositivo`, `expires_at` (TTL): evita el doble envío |
 
 Los índices se crean al arrancar (`Notifications.Unread.IndexSetup`, con reintentos).
 
@@ -359,6 +442,12 @@ Ver `.env.example`.
 | `SECRET_KEY_BASE` | clave del endpoint (obligatoria en producción) |
 | `CHECK_ORIGIN` | orígenes permitidos para el WebSocket (lista separada por comas, o `false`) |
 | `HISTORY_RETENTION_DAYS` | días que se conserva cada entrada del historial; `0` o sin definir = para siempre (por defecto) |
+| `VAPID_PRIVATE_KEY` | clave privada VAPID en base64url (`mix push.gen_vapid`). Sin ella no se envían pushes web |
+| `VAPID_SUBJECT` | contacto que viaja en el JWT VAPID, por ejemplo `mailto:equipo@dominio` |
+| `EXPO_ACCESS_TOKEN` | opcional: token de acceso de Expo (seguridad reforzada) |
+| `EXPO_PUSH_URL` | opcional: URL de la API de Expo (por defecto la oficial) |
+| `PUSH_MAX_DEVICES` | dispositivos máximos por usuario (10) |
+| `PUSH_ALLOWED_HOSTS` | servicios de push web aceptados, como sufijos de host separados por comas |
 | `LOG_LEVEL` | `debug`, `info`, `warning` o `error` |
 
 ## Logs
@@ -489,5 +578,4 @@ make ci
 - Los eventos de suspensión de usuarios no se consumen (no cambian el estado de lectura).
 - Los mensajes directos no encienden indicadores de no leído acá (eso lo lleva `messaging`); en
   `notifications` solo alimentan el historial.
-- Si un mensaje se edita y agrega una mención, no se vuelve a notificar.
 - Publicar la imagen y desplegarla (secrets de Docker Hub y la VM) no está en este pipeline.
