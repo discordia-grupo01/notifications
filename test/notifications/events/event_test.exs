@@ -17,6 +17,7 @@ defmodule Notifications.Events.EventTest do
                messaging.message_created messaging.direct_message_created
                messaging.message_updated messaging.message_deleted
                users.profile_updated servers.server_updated messaging.user_presence_changed
+               voice.private_call
              ))
   end
 
@@ -84,6 +85,26 @@ defmodule Notifications.Events.EventTest do
 
     assert {:ok, %Event.DirectMessageCreated{content_preview: "hola"}} =
              Event.parse("messaging.direct_message_created", payload)
+  end
+
+  test "parses a private voice call event" do
+    payload =
+      base(%{
+        "call_id" => "call-1",
+        "conversation_id" => "conversation-1",
+        "caller_id" => "caller-1",
+        "recipient_id" => "recipient-1",
+        "status" => "ringing"
+      })
+
+    assert {:ok,
+            %Event.PrivateCall{
+              call_id: "call-1",
+              conversation_id: "conversation-1",
+              caller_id: "caller-1",
+              recipient_id: "recipient-1",
+              status: "ringing"
+            }} = Event.parse("voice.private_call", payload)
   end
 
   test "parses messaging.message_updated with the mentions it has after the edit" do
