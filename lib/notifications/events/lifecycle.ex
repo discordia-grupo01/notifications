@@ -182,6 +182,13 @@ defmodule Notifications.Events.Lifecycle do
     else
       other -> outcome(other, "messaging.direct_message_created")
     end
+
+    def handle(%Event.PrivateCall{} = event) do
+      case Delivery.notify(event) do
+        :ok -> :ok
+        {:error, reason} -> outcome({:error, reason}, "voice.private_call")
+      end
+    end
   end
 
   def handle(%Event.UserProfileUpdated{} = event) do

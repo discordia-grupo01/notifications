@@ -43,6 +43,12 @@ defmodule Notifications.Delivery do
     with {:ok, recipients} <- Recipients.for_direct_message(event) do
       deliver(event, recipients)
     end
+
+    defp run(%Event.PrivateCall{} = event) do
+      with {:ok, recipients} <- Recipients.for_private_call(event) do
+        deliver(event, recipients)
+      end
+    end
   end
 
   defp deliver(_event, recipients) when map_size(recipients) == 0, do: :ok
@@ -74,4 +80,5 @@ defmodule Notifications.Delivery do
   defp kind_name(:mention), do: "mention"
   defp kind_name(:message), do: "message"
   defp kind_name(:direct), do: "direct_message"
+  defp kind_name(:call), do: "voice_call"
 end
