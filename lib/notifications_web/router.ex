@@ -27,5 +27,11 @@ defmodule NotificationsWeb.Router do
     put "/settings/channels/:channel_id", SettingsController, :update_channel
 
     get "/history", HistoryController, :index
+
+    get "/push/settings", PushController, :show_settings
+    put "/push/settings", PushController, :update_settings
+    post "/push/devices", PushController, :register_device
+    delete "/push/devices/:id", PushController, :delete_device
+    get "/push/vapid-public-key", PushController, :vapid_public_key
   end
 end
