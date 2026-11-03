@@ -185,10 +185,7 @@ defmodule Notifications.Events.Lifecycle do
   end
 
   def handle(%Event.PrivateCall{} = event) do
-    case Delivery.notify(event) do
-      :ok -> :ok
-      {:error, reason} -> outcome({:error, reason}, "voice.private_call")
-    end
+    Delivery.notify(event)
   end
 
   def handle(%Event.UserProfileUpdated{} = event) do
