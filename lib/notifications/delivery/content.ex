@@ -4,6 +4,8 @@ defmodule Notifications.Delivery.Content do
   alias Notifications.Unread.Repo, as: UnreadRepo
 
   @default_user "Usuario"
+  @default_mention "@usuario"
+  @mention ~r/<@([A-Za-z0-9_-]{1,64})>/
   @default_server "Servidor"
   @default_channel "canal"
   @default_text "Nuevo mensaje"
@@ -30,11 +32,11 @@ defmodule Notifications.Delivery.Content do
   end
 
   def build(%{conversation_id: conversation_id} = event) do
-    with {:ok, author} <- user_name(event.author_id) do
+    with {:ok, author, preview} <- author_and_preview(event) do
       {:ok,
        %{
          title: @direct_title,
-         body: body(author, event.content_preview),
+         body: body(author, preview),
          data: %{
            "conversation_id" => conversation_id,
            "message_id" => event.message_id,
@@ -64,13 +66,13 @@ defmodule Notifications.Delivery.Content do
   defp call_body(_caller, _status), do: "Actualización de llamada de voz"
 
   defp build_channel(%{server_id: server_id, channel_id: channel_id} = event) do
-    with {:ok, author} <- user_name(event.author_id),
+    with {:ok, author, preview} <- author_and_preview(event),
          {:ok, server} <- server_name(server_id),
          {:ok, channel} <- channel_name(event) do
       {:ok,
        %{
          title: "#{server} - #{channel}",
-         body: body(author, event.content_preview),
+         body: body(author, preview),
          data: %{
            "server_id" => server_id,
            "channel_id" => channel_id,
@@ -79,6 +81,30 @@ defmodule Notifications.Delivery.Content do
          }
        }}
     end
+  end
+
+  defp author_and_preview(%{author_id: author_id, content_preview: preview}) do
+    ids = Enum.uniq([author_id | mention_ids(preview)])
+
+    with {:ok, names} <- Repo.impl().get_user_names(ids) do
+      {:ok, Map.get(names, author_id) || @default_user, resolve_mentions(preview, names)}
+    end
+  end
+
+  defp mention_ids(nil), do: []
+
+  defp mention_ids(preview),
+    do: @mention |> Regex.scan(preview, capture: :all_but_first) |> List.flatten()
+
+  defp resolve_mentions(nil, _names), do: nil
+
+  defp resolve_mentions(preview, names) do
+    Regex.replace(@mention, preview, fn _token, id ->
+      case Map.get(names, id) do
+        nil -> @default_mention
+        name -> "@" <> name
+      end
+    end)
   end
 
   defp body(author, nil), do: "#{author}: #{@default_text}"
