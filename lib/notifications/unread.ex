@@ -1,8 +1,8 @@
 defmodule Notifications.Unread do
   alias Notifications.UUID
+  alias Notifications.Settings
   alias Notifications.Unread.{Access, Repo, State}
 
-  @uuid_v7 ~r/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   @max_future_seconds 60
 
   @spec mongo_ready?() :: boolean()
@@ -16,8 +16,9 @@ defmodule Notifications.Unread do
          channel_ids = Enum.map(visible, & &1.channel_id),
          {:ok, activity} <- repo.get_activity(channel_ids),
          {:ok, reads} <- repo.get_read_markers(user_id, channel_ids),
-         {:ok, mentions} <- repo.get_mention_markers(user_id, channel_ids) do
-      {:ok, State.build(visible, activity, reads, mentions)}
+         {:ok, mentions} <- repo.get_mention_markers(user_id, channel_ids),
+         {:ok, settings} <- Settings.scopes(user_id) do
+      {:ok, visible |> State.build(activity, reads, mentions) |> State.apply_settings(settings)}
     end
   end
 
@@ -28,11 +29,37 @@ defmodule Notifications.Unread do
     repo = Repo.impl()
 
     with {:ok, requested} <- validate_message_id(message_id),
-         {:ok, server_id} <- fetch_text_channel(repo, channel_id),
-         :ok <- ensure_visible(user_id, channel_id),
+         {:ok, server_id} <- Access.authorize_channel(user_id, channel_id),
          {:ok, up_to} <- resolve(repo, channel_id, requested) do
       persist(repo, user_id, channel_id, server_id, up_to)
     end
+  end
+
+  @spec mark_all_read(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def mark_all_read(user_id) do
+    repo = Repo.impl()
+
+    with {:ok, visible} <- Access.visible_channels(user_id),
+         channel_ids = Enum.map(visible, & &1.channel_id),
+         {:ok, activity} <- repo.get_activity(channel_ids),
+         {:ok, reads} <- repo.get_read_markers(user_id, channel_ids) do
+      entries = unread_entries(visible, activity, reads)
+      persist_all(repo, user_id, entries)
+    end
+  end
+
+  defp unread_entries(visible, activity, reads) do
+    for %{channel_id: id, server_id: server_id, floor: floor} <- visible,
+        last = Map.get(activity, id),
+        last > Enum.max([floor, Map.get(reads, id, "")]) do
+      %{channel_id: id, server_id: server_id, message_id: last}
+    end
+  end
+
+  defp persist_all(_repo, _user_id, []), do: {:ok, 0}
+
+  defp persist_all(repo, user_id, entries) do
+    with :ok <- repo.mark_all_read(user_id, entries), do: {:ok, length(entries)}
   end
 
   defp persist(_repo, _user_id, _channel_id, _server_id, nil), do: {:ok, nil}
@@ -51,7 +78,7 @@ defmodule Notifications.Unread do
   defp validate_message_id(id) when id in [nil, ""], do: {:ok, nil}
 
   defp validate_message_id(id) when is_binary(id) do
-    if Regex.match?(@uuid_v7, id) and id <= future_limit(),
+    if UUID.v7?(id) and id <= future_limit(),
       do: {:ok, id},
       else: {:error, :invalid_payload}
   end
@@ -60,21 +87,4 @@ defmodule Notifications.Unread do
 
   defp future_limit,
     do: DateTime.utc_now() |> DateTime.add(@max_future_seconds, :second) |> UUID.floor_v7()
-
-  defp fetch_text_channel(repo, channel_id) do
-    case repo.get_channel(channel_id) do
-      %{"kind" => "text", "server_id" => server_id} -> {:ok, server_id}
-      nil -> {:error, :channel_not_found}
-      %{} -> {:error, :channel_not_found}
-      {:error, _reason} = error -> error
-    end
-  end
-
-  defp ensure_visible(user_id, channel_id) do
-    with {:ok, visible} <- Access.visible_channels(user_id) do
-      if Enum.any?(visible, &(&1.channel_id == channel_id)),
-        do: :ok,
-        else: {:error, :forbidden}
-    end
-  end
 end

@@ -7,6 +7,8 @@ defmodule Notifications.Unread.Repo.Mongo do
   @activity "channel_activity"
   @read_markers "read_markers"
   @mention_markers "mention_markers"
+  @settings "notification_settings"
+  @history "notification_history"
   @replica_servers "replica_servers"
   @replica_roles "replica_roles"
   @replica_members "replica_members"
@@ -29,8 +31,22 @@ defmodule Notifications.Unread.Repo.Mongo do
     by_user = [[name: "by_user_channel", key: [user_id: 1, channel_id: 1]]]
     by_user_server = [[name: "by_user_server", key: [user_id: 1, server_id: 1]]]
 
+    settings_indexes = [
+      [name: "by_user", key: [user_id: 1]],
+      [name: "by_server", key: [server_id: 1]],
+      [name: "by_scope", key: [scope_id: 1]]
+    ]
+
     clock_ttl = [
       [name: "event_clocks_expires_at_ttl", key: [expires_at: 1], expireAfterSeconds: 0]
+    ]
+
+    history_indexes = [
+      [name: "by_user_timeline", key: [user_id: 1, occurred_at: -1, message_id: -1]],
+      [name: "by_message", key: [message_id: 1]],
+      [name: "history_expires_at_ttl", key: [expires_at: 1], expireAfterSeconds: 0],
+      [name: "by_channel", key: [channel_id: 1]],
+      [name: "by_server", key: [server_id: 1]]
     ]
 
     with :ok <- Mongo.create_indexes(@conn, @channels, by_server),
@@ -44,6 +60,8 @@ defmodule Notifications.Unread.Repo.Mongo do
              @replica_members,
              replica_ttl ++ by_server ++ [[name: "by_user", key: [user_id: 1]]]
            ),
+         :ok <- Mongo.create_indexes(@conn, @settings, settings_indexes),
+         :ok <- Mongo.create_indexes(@conn, @history, history_indexes),
          :ok <- Mongo.create_indexes(@conn, @replica_overrides, by_server) do
       Mongo.create_indexes(@conn, @clocks, clock_ttl)
     end
@@ -88,6 +106,8 @@ defmodule Notifications.Unread.Repo.Mongo do
          {:ok, _result} <- Mongo.delete_many(@conn, @read_markers, %{"channel_id" => channel_id}),
          {:ok, _result} <-
            Mongo.delete_many(@conn, @mention_markers, %{"channel_id" => channel_id}),
+         {:ok, _result} <- Mongo.delete_many(@conn, @settings, %{"scope_id" => channel_id}),
+         {:ok, _result} <- Mongo.delete_many(@conn, @history, %{"channel_id" => channel_id}),
          {:ok, _result} <- Mongo.delete_one(@conn, @replica_overrides, %{"_id" => channel_id}),
          {:ok, _result} <- Mongo.delete_one(@conn, @channels, %{"_id" => channel_id}) do
       :ok
@@ -106,6 +126,8 @@ defmodule Notifications.Unread.Repo.Mongo do
          {:ok, _result} <- Mongo.delete_many(@conn, @mention_markers, by_channels),
          {:ok, _result} <- Mongo.delete_many(@conn, @read_markers, by_server),
          {:ok, _result} <- Mongo.delete_many(@conn, @mention_markers, by_server),
+         {:ok, _result} <- Mongo.delete_many(@conn, @settings, by_server),
+         {:ok, _result} <- Mongo.delete_many(@conn, @history, by_server),
          {:ok, _result} <- Mongo.delete_many(@conn, @replica_overrides, by_server),
          {:ok, _result} <- Mongo.delete_many(@conn, @replica_members, by_server),
          {:ok, _result} <- Mongo.delete_many(@conn, @replica_roles, by_server),
@@ -180,7 +202,11 @@ defmodule Notifications.Unread.Repo.Mongo do
            Mongo.delete_many(@conn, @mention_markers, %{
              "user_id" => user_id,
              "server_id" => server_id
-           }) do
+           }),
+         {:ok, _result} <-
+           Mongo.delete_many(@conn, @settings, %{"user_id" => user_id, "server_id" => server_id}),
+         {:ok, _result} <-
+           Mongo.delete_many(@conn, @history, %{"user_id" => user_id, "server_id" => server_id}) do
       {:ok, :applied}
     end
   end
@@ -281,6 +307,20 @@ defmodule Notifications.Unread.Repo.Mongo do
     do: markers(@mention_markers, "last_mention_id", user_id, channel_ids)
 
   @impl true
+  def mark_all_read(user_id, entries) do
+    operations =
+      Enum.map(entries, fn %{channel_id: channel_id, server_id: server_id, message_id: id} ->
+        {marker_key(user_id, channel_id),
+         %{
+           "$max" => %{"last_read_id" => id},
+           "$set" => %{"user_id" => user_id, "channel_id" => channel_id, "server_id" => server_id}
+         }}
+      end)
+
+    upsert_many(@read_markers, operations)
+  end
+
+  @impl true
   def mark_read(user_id, channel_id, server_id, message_id) do
     upsert(
       @read_markers,
@@ -290,6 +330,107 @@ defmodule Notifications.Unread.Repo.Mongo do
         "$set" => %{"user_id" => user_id, "channel_id" => channel_id, "server_id" => server_id}
       }
     )
+  end
+
+  @impl true
+  def list_settings(user_id), do: list(@settings, %{"user_id" => user_id})
+
+  @impl true
+  def get_setting(user_id, scope_id),
+    do: Mongo.find_one(@conn, @settings, %{"_id" => setting_key(user_id, scope_id)})
+
+  @impl true
+  def put_setting(user_id, scope, scope_id, server_id, changes) do
+    key = setting_key(user_id, scope_id)
+    fields = Map.new(changes, fn {field, value} -> {Atom.to_string(field), value} end)
+
+    identity = %{
+      "user_id" => user_id,
+      "scope" => Atom.to_string(scope),
+      "scope_id" => scope_id,
+      "server_id" => server_id
+    }
+
+    defaults = Map.drop(%{"muted" => false, "level" => nil}, Map.keys(fields))
+    update = %{"$set" => fields, "$setOnInsert" => Map.merge(identity, defaults)}
+
+    with :ok <- upsert(@settings, key, update),
+         {:ok, _result} <-
+           Mongo.delete_one(@conn, @settings, %{
+             "_id" => key,
+             "muted" => %{"$ne" => true},
+             "level" => nil
+           }) do
+      :ok
+    end
+  end
+
+  @impl true
+  def list_settings_for(user_ids, scope_ids),
+    do:
+      list(@settings, %{
+        "user_id" => %{"$in" => user_ids},
+        "scope_id" => %{"$in" => scope_ids}
+      })
+
+  @impl true
+  def list_settings_by_scope(scope_ids),
+    do: list(@settings, %{"scope_id" => %{"$in" => scope_ids}})
+
+  @impl true
+  def list_history_mention_users(message_id) do
+    with {:ok, docs} <- list(@history, %{"message_id" => message_id, "kind" => "mention"}) do
+      {:ok, Enum.map(docs, & &1["user_id"])}
+    end
+  end
+
+  @impl true
+  def delete_history_entries(_message_id, []), do: :ok
+
+  def delete_history_entries(message_id, user_ids) do
+    filter = %{"message_id" => message_id}
+
+    filter =
+      if user_ids == :all, do: filter, else: Map.put(filter, "user_id", %{"$in" => user_ids})
+
+    case Mongo.delete_many(@conn, @history, filter) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
+  def put_history(items) do
+    operations =
+      Enum.map(items, fn %{"_id" => id} = item ->
+        {id, %{"$setOnInsert" => Map.delete(item, "_id")}}
+      end)
+
+    upsert_many(@history, operations)
+  end
+
+  @impl true
+  def list_history(user_id, before, limit) do
+    sort = [occurred_at: -1, message_id: -1]
+
+    case Mongo.find(@conn, @history, history_filter(user_id, before), sort: sort, limit: limit) do
+      {:error, reason} -> {:error, reason}
+      cursor -> {:ok, Enum.to_list(cursor)}
+    end
+  rescue
+    error -> {:error, error}
+  end
+
+  defp history_filter(user_id, nil), do: %{"user_id" => user_id}
+
+  defp history_filter(user_id, {at, message_id}) do
+    %{
+      "user_id" => user_id,
+      "$or" => [
+        %{"occurred_at" => %{"$lt" => at}},
+        %{"occurred_at" => at, "message_id" => %{"$lt" => message_id}}
+      ]
+    }
   end
 
   defp ensure_channel(channel_id, server_id) do
@@ -316,21 +457,28 @@ defmodule Notifications.Unread.Repo.Mongo do
   defp record_mentions([], _channel_id, _server_id, _message_id), do: :ok
 
   defp record_mentions(user_ids, channel_id, server_id, message_id) do
+    operations =
+      Enum.map(user_ids, fn user_id ->
+        {marker_key(user_id, channel_id),
+         %{
+           "$max" => %{"last_mention_id" => message_id},
+           "$set" => %{
+             "user_id" => user_id,
+             "channel_id" => channel_id,
+             "server_id" => server_id
+           }
+         }}
+      end)
+
+    upsert_many(@mention_markers, operations)
+  end
+
+  defp upsert_many(_collection, []), do: :ok
+
+  defp upsert_many(collection, operations) do
     bulk =
-      Enum.reduce(user_ids, Mongo.UnorderedBulk.new(@mention_markers), fn user_id, bulk ->
-        Mongo.UnorderedBulk.update_one(
-          bulk,
-          %{"_id" => marker_key(user_id, channel_id)},
-          %{
-            "$max" => %{"last_mention_id" => message_id},
-            "$set" => %{
-              "user_id" => user_id,
-              "channel_id" => channel_id,
-              "server_id" => server_id
-            }
-          },
-          upsert: true
-        )
+      Enum.reduce(operations, Mongo.UnorderedBulk.new(collection), fn {id, update}, bulk ->
+        Mongo.UnorderedBulk.update_one(bulk, %{"_id" => id}, update, upsert: true)
       end)
 
     case Mongo.BulkWrite.write(@conn, bulk) do
@@ -369,6 +517,7 @@ defmodule Notifications.Unread.Repo.Mongo do
 
   defp member_key(server_id, user_id), do: "#{server_id}:#{user_id}"
   defp marker_key(user_id, channel_id), do: "#{user_id}:#{channel_id}"
+  defp setting_key(user_id, scope_id), do: "#{user_id}:#{scope_id}"
 
   defp cached_channel_ids(server_id) do
     @conn

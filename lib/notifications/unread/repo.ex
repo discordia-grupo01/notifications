@@ -1,6 +1,8 @@
 defmodule Notifications.Unread.Repo do
   @type result :: :ok | {:error, term()}
   @type write_result :: {:ok, :applied | :stale} | {:error, term()}
+  @type read_entry :: %{channel_id: String.t(), server_id: String.t(), message_id: String.t()}
+  @type setting_changes :: %{optional(:muted) => boolean(), optional(:level) => String.t() | nil}
   @type override :: %{role_id: String.t(), allow: [String.t()], deny: [String.t()]}
 
   @callback ping() :: :ok | {:error, term()}
@@ -50,8 +52,35 @@ defmodule Notifications.Unread.Repo do
               {:ok, %{String.t() => String.t()}} | {:error, term()}
   @callback get_mention_markers(String.t(), [String.t()]) ::
               {:ok, %{String.t() => String.t()}} | {:error, term()}
+  @callback mark_all_read(user_id :: String.t(), [read_entry()]) :: result()
   @callback mark_read(user_id :: String.t(), String.t(), String.t(), message_id :: String.t()) ::
               result()
+
+  @callback list_settings(user_id :: String.t()) :: {:ok, [map()]} | {:error, term()}
+  @callback get_setting(user_id :: String.t(), scope_id :: String.t()) ::
+              map() | nil | {:error, term()}
+  @callback put_setting(
+              user_id :: String.t(),
+              scope :: :server | :channel,
+              scope_id :: String.t(),
+              server_id :: String.t(),
+              changes :: setting_changes()
+            ) :: result()
+
+  @callback list_settings_for(user_ids :: [String.t()], scope_ids :: [String.t()]) ::
+              {:ok, [map()]} | {:error, term()}
+  @callback list_settings_by_scope(scope_ids :: [String.t()]) ::
+              {:ok, [map()]} | {:error, term()}
+  @callback list_history_mention_users(message_id :: String.t()) ::
+              {:ok, [String.t()]} | {:error, term()}
+  @callback delete_history_entries(message_id :: String.t(), user_ids :: [String.t()] | :all) ::
+              result()
+  @callback put_history(items :: [map()]) :: result()
+  @callback list_history(
+              user_id :: String.t(),
+              before :: {DateTime.t(), String.t()} | nil,
+              limit :: pos_integer()
+            ) :: {:ok, [map()]} | {:error, term()}
 
   @spec impl() :: module()
   def impl, do: Application.get_env(:notifications, :unread_repo, Notifications.Unread.Repo.Mongo)

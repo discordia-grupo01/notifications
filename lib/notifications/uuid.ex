@@ -1,4 +1,15 @@
 defmodule Notifications.UUID do
+  @v7 ~r/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+  @any ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+  @spec v7?(term()) :: boolean()
+  def v7?(value) when is_binary(value), do: Regex.match?(@v7, value)
+  def v7?(_other), do: false
+
+  @spec valid?(term()) :: boolean()
+  def valid?(value) when is_binary(value), do: Regex.match?(@any, value)
+  def valid?(_other), do: false
+
   @spec generate() :: String.t()
   def generate do
     <<u0::48, _::4, u1::12, _::2, u2::62>> = :crypto.strong_rand_bytes(16)

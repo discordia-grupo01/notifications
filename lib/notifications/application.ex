@@ -16,6 +16,7 @@ defmodule Notifications.Application do
     children =
       [
         {Phoenix.PubSub, name: Notifications.PubSub},
+        Notifications.Delivery.Dispatcher,
         {Mongo,
          Notifications.MongoOptions.build(
            mongo_url,

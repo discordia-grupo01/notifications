@@ -7,7 +7,14 @@ defmodule Notifications.Events.Consumer do
 
   @exchange "discordia.events"
   @default_queue "notifications.unread_state"
-  @unaudited [Event.MessageCreated]
+  @unaudited [
+    Event.MessageCreated,
+    Event.DirectMessageCreated,
+    Event.MessageUpdated,
+    Event.MessageDeleted,
+    Event.UserProfileUpdated,
+    Event.UserPresenceChanged
+  ]
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 

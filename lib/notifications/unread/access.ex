@@ -20,6 +20,24 @@ defmodule Notifications.Unread.Access do
     end
   end
 
+  @spec authorize_channel(String.t(), String.t()) ::
+          {:ok, String.t()} | {:error, :channel_not_found | :forbidden | term()}
+  def authorize_channel(user_id, channel_id) do
+    with {:ok, server_id} <- fetch_text_channel(Repo.impl(), channel_id),
+         {:ok, visible} <- visible_channels(user_id) do
+      if Enum.any?(visible, &(&1.channel_id == channel_id)),
+        do: {:ok, server_id},
+        else: {:error, :forbidden}
+    end
+  end
+
+  @spec member?(String.t(), String.t()) :: {:ok, boolean()} | {:error, term()}
+  def member?(user_id, server_id) do
+    with {:ok, memberships} <- Repo.impl().list_memberships(user_id) do
+      {:ok, Enum.any?(memberships, &(&1["server_id"] == server_id))}
+    end
+  end
+
   @spec compute(String.t(), [map()], map(), [map()], [map()], [map()]) :: [visible()]
   def compute(user_id, memberships, owners, roles, channels, overrides) do
     roles_by_server =
@@ -42,6 +60,15 @@ defmodule Notifications.Unread.Access do
         server_id: member["server_id"],
         floor: member |> member_since() |> UUID.floor_v7()
       }
+    end
+  end
+
+  defp fetch_text_channel(repo, channel_id) do
+    case repo.get_channel(channel_id) do
+      %{"kind" => "text", "server_id" => server_id} -> {:ok, server_id}
+      nil -> {:error, :channel_not_found}
+      %{} -> {:error, :channel_not_found}
+      {:error, _reason} = error -> error
     end
   end
 

@@ -1,13 +1,21 @@
 # notifications (Elixir)
 
-Servicio de **notificaciones** de Discordia. Cubre la historia **"Ver notificaciones no
-leídas"**: CA1 indicador de no leído por canal, CA2 indicador de no leído por servidor (si al
-menos un canal tiene no leídos) y CA3 indicador destacado para las menciones (historia
-optativa, ya implementada del lado de `messaging` en #46).
+Servicio de **notificaciones** de Discordia. Cubre cuatro historias:
+
+- **"Ver notificaciones no leídas"**: CA1 indicador de no leído por canal, CA2 indicador de no
+  leído por servidor (si al menos un canal tiene no leídos) y CA3 indicador destacado para las
+  menciones (historia optativa, ya implementada del lado de `messaging` en #46).
+- **"Silenciar notificaciones de un canal o servidor"** (HU #64): ver "Silenciar un canal o un
+  servidor".
+- **"Configurar preferencias de notificación"** (HU #65): ver "Preferencias de notificación".
+- **"Centro de notificaciones con historial"** (HU #67): ver "Centro de notificaciones (historial)".
+- **"Notificaciones push"** (HU #66): ver "Notificaciones push".
 
 El servicio **no llama a ningún otro servicio por HTTP**: todo lo que sabe lo aprende
-consumiendo eventos del bus. Lo único que expone por REST es el ticket para abrir el
-WebSocket (ver "Por qué hay un endpoint HTTP").
+consumiendo eventos del bus (lo único que sale hacia afuera son los envíos a los servicios de
+push, ver "Notificaciones push"). Lo que expone por REST es el ticket para abrir el WebSocket (ver
+"Por qué hay un endpoint HTTP"), la configuración del propio usuario (silenciados y
+preferencias) y la lectura de su historial.
 
 ## Stack
 - Lenguaje: Elixir / Phoenix (Channels para WS)
@@ -59,13 +67,23 @@ WebSocket (ver "Por qué hay un endpoint HTTP").
 El navegador no puede mandar el header `Authorization` al abrir un WebSocket y poner el JWT
 en la URL lo deja en logs (ADR 0002). Por eso el cliente pide un ticket de un solo uso
 (30 s) con `POST /v1/notifications/socket-tickets` y conecta con `?ticket=<ticket>`. Es la
-única excepción a "todo por eventos", y es la misma que ya usa `messaging`.
+única excepción a "todo por eventos" en el flujo de lectura, y es la misma que ya usa
+`messaging`. Los silenciados son configuración del usuario, no un hecho de otro servicio, y por eso
+se guardan acá y se piden por REST.
 
 ## Endpoints / Channels
 
 - `GET /health` (ping: responde `{"status":"ok"}` sin tocar Mongo ni el broker), `GET /livez` (igual, en texto plano), `GET /readyz` (readiness pinguea Mongo)
 - `POST /v1/notifications/socket-tickets` -- ticket para el WebSocket (Bearer JWT, validado
   por Kong)
+- `GET /v1/notifications/settings` -- qué servidores y canales silenció el usuario y qué
+  preferencias de nivel fijó
+- `PUT /v1/notifications/settings/servers/:server_id` y
+  `PUT /v1/notifications/settings/channels/:channel_id` -- silenciar o reactivar
+  (`{"muted": true | false}`) y/o elegir el nivel de aviso
+  (`{"level": "all" | "mentions" | "none" | null}`)
+- `GET /v1/notifications/history?limit=&before=` -- historial de menciones y mensajes directos,
+  del más nuevo al más viejo (ver "Centro de notificaciones (historial)")
 - WS `/notifications/socket?ticket=<ticket>`, canal `notifications:<user_id>` (solo se puede
   unir uno a su propio topic)
 
@@ -83,13 +101,25 @@ Al unirse el servidor empuja `snapshot` con el estado completo; después va empu
       "server_id": "…",
       "unread": true,
       "mention": false,
+      "notify": false,
+      "muted": false,
       "channels": [
-        { "channel_id": "…", "unread": true, "mention": false }
+        { "channel_id": "…", "unread": true, "mention": false, "notify": false, "muted": false }
       ]
     }
-  ]
+  ],
+  "muted": { "servers": ["…"], "channels": ["…"] },
+  "preferences": { "servers": { "<server_id>": "all" }, "channels": { "<channel_id>": "none" } }
 }
 ```
+
+`muted` y `preferences` (arriba de todo) listan lo que el usuario configuró explícitamente, aunque
+no tenga nada sin leer: sirven para dibujar el estado de cada canal y servidor sin pedir nada más.
+`preferences` trae solo lo guardado; lo heredado o por defecto no aparece.
+
+`notify` es el aviso destacado: lo que decide si hay que mostrar o enviar una notificación. `unread`
+es solo "hay algo sin leer" y no depende de ninguna configuración. `mention` indica que hay una
+mención pendiente que sigue contando como destacada.
 
 `unread_updated` -- cambió el estado de un canal (y de su servidor):
 
@@ -99,7 +129,9 @@ Al unirse el servidor empuja `snapshot` con el estado completo; después va empu
   "channel_id": "…",
   "unread": true,
   "mention": true,
-  "server": { "unread": true, "mention": true }
+  "notify": true,
+  "muted": false,
+  "server": { "unread": true, "mention": true, "notify": true, "muted": false }
 }
 ```
 
@@ -111,6 +143,7 @@ Eventos que manda el cliente:
 | Evento | Payload | Respuesta |
 |---|---|---|
 | `mark_read` | `{"channel_id": "…", "message_id": "…"}` (`message_id` es opcional: sin él se lee hasta el último mensaje) | `ok`, o error `FORBIDDEN` / `CHANNEL_NOT_FOUND` / `UNREAD_UNAVAILABLE` |
+| `mark_all_read` | `{}` | `{"channels": N}` con cuántos canales se limpiaron, o error `UNREAD_UNAVAILABLE`; después llega un `snapshot` (vacío) a todas las sesiones del usuario |
 | `snapshot` | `{}` | `ok` y un nuevo `snapshot` |
 
 `mark_read` nunca retrocede un marcador. Acepta el `message_id` que mande el cliente aunque el
@@ -120,6 +153,19 @@ canal se encendería como no leído justo después de leerlo). Tiene que ser un 
 más de 60 s en el futuro; si no, responde `INVALID_PAYLOAD`.
 Se avisa a las otras sesiones del mismo usuario para que apaguen el indicador también.
 
+### Marcar como leído
+
+- **Al abrir un canal.** El cliente manda `mark_read` cuando el usuario abre el canal y ve los
+  mensajes nuevos, con el `message_id` del último mensaje que mostró (así no importa si el evento
+  de ese mensaje todavía no llegó). El indicador del canal, su mención y, si era el último
+  pendiente, el del servidor se apagan y llega `unread_updated`.
+- **Marcar todo.** `mark_all_read` pone, para cada canal que el usuario puede ver y tiene algo sin
+  leer, el marcador en el último mensaje del canal, con una sola escritura en bloque. Solo toca
+  canales con contenido sin leer, así que repetirlo no escribe nada (`{"channels": 0}`). Después
+  publica un `resync` a todas las sesiones del usuario, que reciben un `snapshot` ya vacío.
+  Lo que se escriba después vuelve a contar como no leído. No existe una versión "por servidor":
+  el cliente puede mandar un `mark_read` por cada canal si lo necesita.
+
 Ejemplo (frames Phoenix v2, `[join_ref, ref, topic, event, payload]`):
 
 ```json
@@ -127,13 +173,210 @@ Ejemplo (frames Phoenix v2, `[join_ref, ref, topic, event, payload]`):
 ["1","2","notifications:<user_id>","mark_read",{"channel_id":"<channel_id>"}]
 ```
 
+### Silenciar un canal o un servidor
+
+Silenciar apaga **solo el aviso destacado** (`mention` y `notify`); la actividad sigue contando
+como no leída (`unread`). Sale de dos silenciados posibles y se combinan con un "o":
+
+| Silenciado | Efecto |
+|---|---|
+| Un canal | Ese canal queda `muted: true`; sus menciones dejan de destacarse. |
+| Un servidor | Todos sus canales quedan `muted: true` y el servidor también. |
+
+- `muted` del servidor es verdadero solo si se silenció **el servidor**; silenciar uno de sus
+  canales no lo marca.
+- El `mention` del servidor se calcula con los canales no silenciados: si el único canal con
+  mención está silenciado, el servidor queda `unread: true` y `mention: false`.
+- Reactivar (`{"muted": false}`) devuelve el aviso destacado de inmediato: la mención se deriva de
+  los mismos marcadores, así que una mención todavía sin leer vuelve a destacarse.
+- Para silenciar un canal hay que poder verlo (`403 FORBIDDEN`, o `404 CHANNEL_NOT_FOUND` si no
+  existe); para silenciar un servidor hay que ser miembro (`404 SERVER_NOT_FOUND`). Reactivar no
+  pide nada: siempre se puede sacar un silenciado.
+- Es idempotente: repetir el mismo pedido deja el mismo resultado.
+- Al guardar, el servicio le dice a todas las sesiones abiertas del usuario que recarguen su
+  estado, así que reciben un `snapshot` nuevo con el `muted` actualizado.
+- Si el usuario deja el servidor o el servidor/canal se borra, sus silenciados se borran también.
+
+```json
+PUT /v1/notifications/settings/channels/<channel_id>
+{ "muted": true }
+
+200 { "channel_id": "…", "muted": true }
+```
+
+### Preferencias de notificación
+
+Cada usuario puede elegir **qué actividad avisa** de forma destacada (`notify`), por servidor y por
+canal. Hay tres niveles:
+
+| Nivel | Qué avisa |
+|---|---|
+| `all` | Todos los mensajes. |
+| `mentions` | Solo las menciones. Es el comportamiento por defecto. |
+| `none` | Nada, ni siquiera las menciones. |
+
+- **Reglas de prioridad (la más específica gana):** el nivel del canal, si lo hay; si no, el del
+  servidor; si no, el por defecto (`mentions`). Un canal con `all` dentro de un servidor en `none`
+  avisa; un canal en `none` dentro de un servidor en `all`, no.
+- **Silenciar gana siempre**: un canal o servidor silenciado vale como `none` aunque tenga un nivel
+  más permisivo configurado.
+- **`unread` no cambia nunca.** Elegir `none` (como silenciar) deja el canal sin leer; solo cambia
+  `notify` y `mention`.
+- **`mention` y `notify`**: con `mentions` van juntos. Con `all`, un mensaje común enciende `notify`
+  pero no `mention` (no hay una mención). Con `none`, ninguno de los dos.
+- `{"level": null}` borra la preferencia: un canal vuelve a heredar la del servidor y un servidor
+  vuelve al valor por defecto. Si el documento queda sin silenciado ni nivel, se borra.
+- El mismo `PUT` acepta `muted`, `level` o ambos y solo cambia lo que se manda. Hace falta al menos
+  uno (`400 INVALID_PAYLOAD`; también si `level` no es `all`/`mentions`/`none`/`null`).
+- Para fijar algo hay que poder ver el canal o ser miembro del servidor. Borrar (`level: null`) o
+  reactivar (`muted: false`) no pide nada.
+- Igual que al silenciar, las sesiones abiertas del usuario reciben un `snapshot` nuevo.
+
+```json
+PUT /v1/notifications/settings/channels/<channel_id>
+{ "level": "all" }
+
+200 { "channel_id": "…", "muted": false, "level": "all" }
+```
+
+`GET /v1/notifications/settings` mantiene `servers` y `channels` (los silenciados) y agrega
+`preferences` con los niveles fijados.
+
+### Notificaciones push
+
+Avisa por fuera de la app (HU #66). Dos proveedores: **Web Push** (VAPID, para el navegador) y
+**Expo Push Service** (para la app móvil; Android primero, iOS necesita una cuenta de Apple
+Developer).
+
+**Quién recibe un push** (se calcula con los mismos silenciados y niveles que el historial):
+
+| Mensaje | Recibe push |
+|---|---|
+| Directo | Siempre el destinatario (si hay bloqueo, `messaging` ni siquiera lo envía). |
+| En un canal, con mención | El mencionado, salvo canal o servidor silenciado o nivel `none`. |
+| En un canal, sin mención | Solo quien tiene el nivel efectivo `all`, si además puede ver el canal. |
+
+El autor nunca recibe el suyo, y silenciar siempre gana. Además se descartan:
+
+- **Quien apagó el push** (`PUT /v1/notifications/push/settings`): un interruptor único, válido
+  para todos sus dispositivos. No toca los indicadores ni el historial dentro de la app.
+- **Quien tiene la app abierta**: `messaging` publica `messaging.user_presence_changed` cuando
+  cambia su estado (conexión activa, inactiva o ninguna, y "No molestar"). Se guarda una réplica y
+  no se manda push si hay una conexión **activa** en cualquier dispositivo, o si está en "No
+  molestar". Inactiva (5 minutos sin interacción) o sin conexión recibe el push. Si no hay dato, o
+  venció (6 horas), se asume app cerrada: se prefiere un aviso de más a perder uno.
+
+**Qué dice el push.** Canal: título `Servidor - Canal`, cuerpo `Nombre: mensaje`. Directo: título
+`Mensaje directo`, cuerpo `Nombre: mensaje`. El texto llega cortado (unos 140 caracteres) en el
+propio evento y **no se guarda**; los nombres salen de réplicas alimentadas por
+`users.profile_updated` y `servers.server_updated` (si faltan, "Usuario" y "Servidor"). El payload
+incluye ids para abrir el lugar correcto: `kind` (`mention`, `message` o `direct_message`),
+`message_id`, `author_id` y `server_id` + `channel_id` o `conversation_id`.
+
+**Dispositivos** (el token viaja solo en el cuerpo, nunca en la URL ni en los logs):
+
+| Método y ruta | Qué hace |
+|---|---|
+| `POST /v1/notifications/push/devices` | Registra el dispositivo. `201 {id}` si es nuevo, `200 {id}` si ya estaba (pasa al usuario actual si estaba a nombre de otro). `409 DEVICE_LIMIT` pasados los 10 por usuario. |
+| `DELETE /v1/notifications/push/devices/:id` | Lo quita (`204`, idempotente). El `id` es opaco, no contiene el token. |
+| `GET` / `PUT /v1/notifications/push/settings` | Interruptor `{"enabled": bool}` (por defecto `true`). |
+| `GET /v1/notifications/push/vapid-public-key` | Clave pública VAPID para `pushManager.subscribe` (`404` si el push web no está configurado). |
+
+Cuerpo de registro: app `{"provider": "expo", "platform": "android" | "ios", "token":
+"ExponentPushToken[...]"}`; navegador `{"provider": "webpush", "platform": "web", "endpoint": "...",
+"p256dh": "...", "auth": "..."}`. El `endpoint` debe ser https de un servicio conocido
+(`PUSH_ALLOWED_HOSTS`), para que nadie nos haga llamar a una dirección cualquiera.
+
+**Cómo se envía.** El consumidor no espera a los servicios de push: arma el mensaje y lo deja en
+tareas en segundo plano con tope (`max_concurrency`, 50); si hay demasiadas en vuelo se descartan
+y se loguea. Por dispositivo: se reserva `evento + dispositivo` (colección `push_deliveries`, TTL
+de 24 h) para no mandar dos veces si RabbitMQ repite el evento; `404`/`410` de Web Push y
+`DeviceNotRegistered` de Expo borran el dispositivo; `429`/`5xx`/red se reintentan 3 veces con
+espera creciente (respeta `Retry-After`); el resto queda anotado en `last_error`. Un fallo de push
+**nunca** hace reintentar el evento, que ya cumplió con el no leído y el historial. Como la reserva
+va antes del envío, si el nodo se cae justo en medio se pierde ese push (a lo sumo uno por
+dispositivo), no se duplica.
+
+**Editar y borrar.** Al editar un mensaje de canal, `notifications` compara las menciones nuevas con
+las entradas que ya tiene del mensaje: quien queda mencionado y no tenía entrada la recibe (si su
+silenciado y nivel lo permiten) y además le llega un push con `(editado)` al final del cuerpo y
+`edited: true` en el payload; a quien dejó de estar mencionado se le quita la entrada; los demás no
+se tocan, así que nadie recibe dos avisos por el mismo mensaje. Al borrar un mensaje (de canal o
+directo) se borran sus entradas de todos los historiales. Un push que ya salió no se puede retirar.
+
+**Qué no cubre.** No agrupa ni limita avisos (cada mensaje, un push). Las reacciones no generan push
+ni entrada. Editar el texto de un mensaje directo no hace nada (no tiene menciones) y las pantallas
+abiertas no se enteran en vivo de una entrada que aparece o desaparece por una edición o un borrado
+hasta que recargan el centro de notificaciones. Los recibos de
+entrega de Expo (errores de FCM posteriores al envío) no se consultan. Las credenciales de los
+dispositivos se guardan sin cifrar en Mongo.
+
+Para generar las claves VAPID: `mix push.gen_vapid`.
+
+### Centro de notificaciones (historial)
+
+Un solo lugar para repasar la actividad relevante sin buscarla canal por canal: **menciones** y
+**mensajes directos** recientes del usuario.
+
+```
+GET /v1/notifications/history?limit=50&before=<next_cursor>
+
+200 {
+  "items": [
+    { "kind": "mention", "message_id": "…", "author_id": "…", "occurred_at": "…",
+      "server_id": "…", "channel_id": "…", "conversation_id": null },
+    { "kind": "direct_message", "message_id": "…", "author_id": "…", "occurred_at": "…",
+      "server_id": null, "channel_id": null, "conversation_id": "…" }
+  ],
+  "next_cursor": "…"
+}
+```
+
+- **CA1 (listado cronológico con acceso directo):** `items` viene del más nuevo al más viejo
+  (los ids de mensaje son UUIDv7, que ordenan por tiempo). Cada entrada trae los ids para abrir la
+  conversación: `server_id` + `channel_id` (+ `message_id` para saltar al mensaje) en una mención y
+  `conversation_id` en un mensaje directo. El cliente resuelve nombres y contenido con lo que ya
+  tiene o con `messaging`: **el historial guarda solo ids, nunca el texto** (igual que los eventos).
+- **CA2 (historial vacío):** si no hay nada, `items` es `[]` y `next_cursor` es `null`. Mostrar el
+  aviso "no hay notificaciones" es del cliente.
+- **Orden:** por el momento en que ocurrió el evento (`occurred_at`), del más nuevo al más viejo; si
+  dos entradas tienen el mismo instante, desempata por `message_id`. **No se ordena por `message_id`**:
+  `messaging` genera ids ordenables por tiempo (v7) solo cuando el cliente no manda `client_id`; con
+  `client_id` (lo que hace el web-client al enviar) el id es un hash (v5) sin orden temporal.
+- **Paginación:** `limit` de 1 a 100 (50 por defecto) y `before` con el `next_cursor` de la página
+  anterior. `next_cursor` es un texto **opaco** (hoy `<milisegundos>_<message_id>`): se reenvía tal
+  cual, sin interpretarlo. Es `null` cuando no quedan más. Un `limit` o `before` inválido es
+  `400 INVALID_PAYLOAD`. Una página puede venir con menos entradas que `limit` (si se ocultaron
+  menciones, ver abajo) y aun así traer `next_cursor`: hay que seguir pidiendo hasta que sea `null`.
+- **Qué entra:** una mención entra si **avisa** para ese usuario según sus preferencias *en el
+  momento en que llega*: un canal silenciado, o con nivel `none` (propio o heredado del servidor),
+  no deja entrada. Las menciones ya vienen filtradas por `messaging` (solo quienes pueden ver el
+  canal, sin el autor, con `@everyone` y roles ya resueltos). Un mensaje directo entra siempre al
+  destinatario. Reactivar un canal **no** recupera lo que no se guardó mientras estaba silenciado.
+- **Qué se oculta al leer:** las menciones de canales que el usuario ya no puede ver (perdió un rol,
+  salió del servidor, el canal se borró). Al salir de un servidor o borrarse un canal/servidor, sus
+  entradas también se borran.
+- **Retención:** por defecto las entradas se conservan **siempre** (sin `expires_at`). Con
+  `HISTORY_RETENTION_DAYS=N` (mayor a 0) cada entrada nueva dura `N` días contados desde el momento
+  del mensaje y Mongo la borra solo (índice TTL en `expires_at`). Cambiar el valor no toca las entradas
+  ya guardadas. Aunque no haya plazo, se borran al salir del servidor o al borrarse el canal/servidor.
+- **Idempotente:** reprocesar un evento no duplica la entrada (`_id` = `usuario:mensaje`).
+- Fuera de alcance: marcar entradas como leídas y avisar en vivo que llegó una (el cliente vuelve a
+  pedir la lista al abrir el centro).
+
 ## Eventos que consume
 
 Una única cola durable, `notifications.unread_state`, enlazada a `discordia.events` (topic):
 
 | Routing key | Para qué |
 |---|---|
-| `messaging.message_created` | actividad del canal y menciones (no se audita: es de alto volumen) |
+| `messaging.message_created` | actividad del canal, menciones e historial (no se audita: es de alto volumen) |
+| `messaging.direct_message_created` | historial del destinatario del mensaje directo (no se audita: es de alto volumen) |
+| `messaging.message_updated` | edición de un mensaje de canal: agrega la entrada de quien quedó mencionado (y le manda un push "editado") y quita la de quien dejó de estarlo (no se audita: lleva texto) |
+| `messaging.message_deleted` | borra de todos los historiales las entradas que apuntan al mensaje |
+| `messaging.user_presence_changed` | réplica de si el usuario tiene la app abierta, para decidir el push (no se audita) |
+| `users.profile_updated` | nombre del autor para el texto del push (solo `user_id`, `name` y `version`; no se audita) |
+| `servers.server_updated` | nombre del servidor para el título del push |
 | `servers.channel_created`, `servers.channel_deleted` | qué canales existen y de qué tipo |
 | `servers.server_deleted` | borra todo lo del servidor y deja una lápida |
 | `servers.member_joined`, `servers.member_left` | alta/baja de la membresía (y el momento de ingreso) |
@@ -181,7 +424,14 @@ Mongo ante un `resync`.
 | `replica_servers`, `replica_roles`, `replica_members`, `replica_overrides` | réplica de permisos |
 | `event_clocks` | relojes LWW y lápidas |
 | `consumed_events` | auditoría de lo consumido |
+| `notification_settings` | `_id` = `user:canal_o_servidor`, `scope` (`server`/`channel`), `scope_id`, `server_id`, `muted`, `level` (`all`/`mentions`/`none` o `null`) |
+| `notification_history` | `_id` = `user:mensaje`, `user_id`, `kind` (`mention`/`direct_message`), `message_id`, `author_id`, `occurred_at`, `server_id`/`channel_id` o `conversation_id`, `expires_at` (TTL) |
 | `socket_tickets` | tickets de un solo uso (TTL) |
+| `replica_user_names`, `replica_server_names` | nombre por `user_id` (última `version`) y por `server_id` (último `occurred_at`) |
+| `replica_presence` | `_id` = usuario, `connections` (`active`/`idle`/`none`), `do_not_disturb`, `version`, `expires_at` (TTL) |
+| `push_settings` | `_id` = usuario, `enabled` (si no hay documento, está activado) |
+| `push_devices` | `_id` opaco, `user_id`, `provider`, `platform`, `credential`, `credential_hash` (único), `created_at`, `last_used_at`, `last_error` |
+| `push_deliveries` | `_id` = `evento:dispositivo`, `expires_at` (TTL): evita el doble envío |
 
 Los índices se crean al arrancar (`Notifications.Unread.IndexSetup`, con reintentos).
 
@@ -196,6 +446,13 @@ Ver `.env.example`.
 | `RABBITMQ_URL` | conexión a RabbitMQ **sin barra final** (una barra es el vhost vacío y el broker rechaza la conexión) |
 | `SECRET_KEY_BASE` | clave del endpoint (obligatoria en producción) |
 | `CHECK_ORIGIN` | orígenes permitidos para el WebSocket (lista separada por comas, o `false`) |
+| `HISTORY_RETENTION_DAYS` | días que se conserva cada entrada del historial; `0` o sin definir = para siempre (por defecto) |
+| `VAPID_PRIVATE_KEY` | clave privada VAPID en base64url (`mix push.gen_vapid`). Sin ella no se envían pushes web |
+| `VAPID_SUBJECT` | contacto que viaja en el JWT VAPID, por ejemplo `mailto:equipo@dominio` |
+| `EXPO_ACCESS_TOKEN` | opcional: token de acceso de Expo (seguridad reforzada) |
+| `EXPO_PUSH_URL` | opcional: URL de la API de Expo (por defecto la oficial) |
+| `PUSH_MAX_DEVICES` | dispositivos máximos por usuario (10) |
+| `PUSH_ALLOWED_HOSTS` | servicios de push web aceptados, como sufijos de host separados por comas |
 | `LOG_LEVEL` | `debug`, `info`, `warning` o `error` |
 
 ## Logs
@@ -301,7 +558,7 @@ Phoenix organiza el codigo por **Context** (dominio de negocio), no por capa tec
 lib/
 ├── notifications/
 │   ├── application.ex            # Supervisor: Mongo, PubSub, consumidores, endpoint
-│   ├── unread.ex                 # API publica: snapshot/1 y mark_read/3
+│   ├── unread.ex                 # API publica: snapshot/1, mark_read/3 y mark_all_read/1
 │   ├── unread/
 │   │   ├── state.ex              # Calculo puro de los indicadores
 │   │   ├── access.ex             # Que canales ve cada usuario
@@ -324,6 +581,6 @@ make ci
 
 ## Pendiente / fuera de alcance
 - Los eventos de suspensión de usuarios no se consumen (no cambian el estado de lectura).
-- Los mensajes directos (DM) no generan notificaciones: `messaging` no los publica.
-- Si un mensaje se edita y agrega una mención, no se vuelve a notificar.
+- Los mensajes directos no encienden indicadores de no leído acá (eso lo lleva `messaging`); en
+  `notifications` solo alimentan el historial.
 - Publicar la imagen y desplegarla (secrets de Docker Hub y la VM) no está en este pipeline.

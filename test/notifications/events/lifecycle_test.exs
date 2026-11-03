@@ -3,10 +3,19 @@ defmodule Notifications.Events.LifecycleTest do
   import Mox
 
   alias Notifications.Events.{Event, Lifecycle}
+  alias Notifications.Delivery.RepoMock, as: DeliveryRepoMock
   alias Notifications.PushMock
   alias Notifications.Unread.RepoMock
 
   setup :verify_on_exit!
+
+  setup do
+    stub(RepoMock, :list_settings_by_scope, fn _scopes -> {:ok, []} end)
+    stub(DeliveryRepoMock, :list_push_disabled, fn _ids -> {:ok, []} end)
+    stub(DeliveryRepoMock, :get_presence, fn _ids -> {:ok, %{}} end)
+    stub(DeliveryRepoMock, :list_devices, fn _ids -> {:ok, []} end)
+    :ok
+  end
 
   setup do
     Application.put_env(:notifications, :push, PushMock)
@@ -238,7 +247,7 @@ defmodule Notifications.Events.LifecycleTest do
       )
     end
 
-    test "records the activity and pushes it to the server's sockets" do
+    test "records the activity, the history of whoever it mentions and pushes it to the sockets" do
       alive()
       channel_alive()
 
@@ -251,6 +260,13 @@ defmodule Notifications.Events.LifecycleTest do
                  mentioned_user_ids: ["u2"]
                }
 
+        :ok
+      end)
+
+      expect(RepoMock, :list_settings_for, fn ["u2"], ["c1", "s1"] -> {:ok, []} end)
+
+      expect(RepoMock, :put_history, fn [item] ->
+        assert %{"_id" => "u2:m1", "user_id" => "u2", "kind" => "mention"} = item
         :ok
       end)
 
@@ -267,6 +283,24 @@ defmodule Notifications.Events.LifecycleTest do
       end)
 
       assert Lifecycle.handle(message_event()) == :ok
+    end
+
+    test "a message that mentions nobody touches no history" do
+      alive()
+      channel_alive()
+      expect(RepoMock, :record_message, fn _attrs -> :ok end)
+      expect(PushMock, :publish, fn "server:s1", "message_created", _payload -> :ok end)
+
+      assert Lifecycle.handle(message_event(%{mentioned_user_ids: []})) == :ok
+    end
+
+    test "a failure recording the history is returned so the event is retried" do
+      alive()
+      channel_alive()
+      expect(RepoMock, :record_message, fn _attrs -> :ok end)
+      expect(RepoMock, :list_settings_for, fn _users, _scopes -> {:error, :timeout} end)
+
+      assert Lifecycle.handle(message_event()) == {:error, :timeout}
     end
 
     test "is ignored when the server was deleted" do
@@ -301,6 +335,8 @@ defmodule Notifications.Events.LifecycleTest do
       alive()
       channel_alive()
       expect(RepoMock, :record_message, fn _attrs -> :ok end)
+      expect(RepoMock, :list_settings_for, fn _users, _scopes -> {:ok, []} end)
+      expect(RepoMock, :put_history, fn _items -> :ok end)
       expect(PushMock, :publish, fn _topic, _event, _payload -> {:error, :not_connected} end)
 
       assert Lifecycle.handle(message_event()) == {:error, :not_connected}
@@ -310,6 +346,269 @@ defmodule Notifications.Events.LifecycleTest do
       expect(RepoMock, :get_clock, fn "server:s1" -> {:error, :timeout} end)
 
       assert Lifecycle.handle(message_event()) == {:error, :timeout}
+    end
+  end
+
+  describe "messaging.direct_message_created" do
+    defp direct_event(extra \\ %{}) do
+      struct!(
+        Event.DirectMessageCreated,
+        base(
+          Map.merge(
+            %{conversation_id: "conv-1", message_id: "m1", author_id: "u1", recipient_id: "u2"},
+            extra
+          )
+        )
+      )
+    end
+
+    test "records an entry in the recipient's history" do
+      expect(RepoMock, :put_history, fn [item] ->
+        assert %{
+                 "_id" => "u2:m1",
+                 "user_id" => "u2",
+                 "kind" => "direct_message",
+                 "conversation_id" => "conv-1",
+                 "author_id" => "u1"
+               } = item
+
+        :ok
+      end)
+
+      assert Lifecycle.handle(direct_event()) == :ok
+    end
+
+    test "a message to oneself leaves nothing behind" do
+      assert Lifecycle.handle(direct_event(%{recipient_id: "u1"})) == :ok
+    end
+
+    test "a storage failure is returned so the event is retried" do
+      expect(RepoMock, :put_history, fn _items -> {:error, :timeout} end)
+
+      assert Lifecycle.handle(direct_event()) == {:error, :timeout}
+    end
+  end
+
+  describe "push" do
+    test "a channel message notifies the devices of whoever it mentions" do
+      alive()
+      channel_alive()
+      stub(RepoMock, :record_message, fn _attrs -> :ok end)
+      stub(RepoMock, :list_settings_for, fn _users, _scopes -> {:ok, []} end)
+      stub(RepoMock, :put_history, fn _items -> :ok end)
+      stub(PushMock, :publish, fn _topic, _event, _payload -> :ok end)
+
+      test_pid = self()
+
+      expect(DeliveryRepoMock, :list_devices, fn ["u2"] ->
+        send(test_pid, :devices_asked)
+        {:ok, []}
+      end)
+
+      assert Lifecycle.handle(message_event()) == :ok
+      assert_received :devices_asked
+    end
+
+    test "a direct message notifies the devices of the recipient" do
+      test_pid = self()
+      stub(RepoMock, :put_history, fn _items -> :ok end)
+
+      expect(DeliveryRepoMock, :list_devices, fn ["u2"] ->
+        send(test_pid, :devices_asked)
+        {:ok, []}
+      end)
+
+      assert Lifecycle.handle(direct_event()) == :ok
+      assert_received :devices_asked
+    end
+
+    test "a push problem never fails the event" do
+      stub(RepoMock, :put_history, fn _items -> :ok end)
+      stub(DeliveryRepoMock, :list_push_disabled, fn _ids -> {:error, :timeout} end)
+
+      assert Lifecycle.handle(direct_event()) == :ok
+    end
+  end
+
+  describe "messaging.message_updated" do
+    defp updated_event(extra \\ %{}) do
+      struct!(
+        Event.MessageUpdated,
+        base(
+          Map.merge(
+            %{
+              server_id: "s1",
+              channel_id: "c1",
+              message_id: "m1",
+              author_id: "u1",
+              mentioned_user_ids: ["u2"],
+              channel_name: "general",
+              content_preview: "hola @usuario"
+            },
+            extra
+          )
+        )
+      )
+    end
+
+    test "adds the entry of the newly mentioned user and pushes it as edited" do
+      alive()
+      channel_alive()
+      expect(RepoMock, :list_history_mention_users, fn "m1" -> {:ok, []} end)
+      expect(RepoMock, :list_settings_for, fn ["u2"], ["c1", "s1"] -> {:ok, []} end)
+
+      expect(RepoMock, :put_history, fn [item] ->
+        assert %{"_id" => "u2:m1", "kind" => "mention"} = item
+        :ok
+      end)
+
+      test_pid = self()
+
+      expect(DeliveryRepoMock, :list_devices, fn ["u2"] ->
+        send(test_pid, :devices_asked)
+        {:ok, []}
+      end)
+
+      assert Lifecycle.handle(updated_event()) == :ok
+      assert_received :devices_asked
+    end
+
+    test "removes the entry of whoever stopped being mentioned and pushes nobody" do
+      alive()
+      channel_alive()
+      expect(RepoMock, :list_history_mention_users, fn "m1" -> {:ok, ["u2"]} end)
+      expect(RepoMock, :delete_history_entries, fn "m1", ["u2"] -> :ok end)
+
+      assert Lifecycle.handle(updated_event(%{mentioned_user_ids: []})) == :ok
+    end
+
+    test "is ignored when the server or the channel was deleted" do
+      expect(RepoMock, :get_clock, fn "server:s1" -> %{"state" => "deleted"} end)
+      assert Lifecycle.handle(updated_event()) == {:ignored, :server_deleted}
+
+      alive()
+      expect(RepoMock, :get_clock, fn "channel:c1" -> %{"state" => "deleted"} end)
+      assert Lifecycle.handle(updated_event()) == {:ignored, :channel_deleted}
+    end
+
+    test "a storage failure is returned so the event is retried" do
+      alive()
+      channel_alive()
+      expect(RepoMock, :list_history_mention_users, fn _id -> {:error, :timeout} end)
+
+      assert Lifecycle.handle(updated_event()) == {:error, :timeout}
+    end
+
+    test "a push problem never fails the edit" do
+      alive()
+      channel_alive()
+      expect(RepoMock, :list_history_mention_users, fn _id -> {:ok, []} end)
+      stub(RepoMock, :list_settings_for, fn _users, _scopes -> {:ok, []} end)
+      stub(RepoMock, :put_history, fn _items -> :ok end)
+      stub(DeliveryRepoMock, :list_push_disabled, fn _ids -> {:error, :timeout} end)
+
+      assert Lifecycle.handle(updated_event()) == :ok
+    end
+  end
+
+  describe "messaging.message_deleted" do
+    defp deleted_event(extra \\ %{}),
+      do:
+        struct!(
+          Event.MessageDeleted,
+          base(Map.merge(%{channel_id: "c1", message_id: "m1", author_id: "u1"}, extra))
+        )
+
+    test "removes the entries that point at the message" do
+      expect(RepoMock, :delete_history_entries, 2, fn "m1", :all -> :ok end)
+
+      assert Lifecycle.handle(deleted_event()) == :ok
+      assert Lifecycle.handle(deleted_event(%{server_id: "s1"})) == :ok
+    end
+
+    test "a storage failure is returned so the event is retried" do
+      expect(RepoMock, :delete_history_entries, fn _id, _users -> {:error, :timeout} end)
+
+      assert Lifecycle.handle(deleted_event()) == {:error, :timeout}
+    end
+  end
+
+  describe "users.profile_updated" do
+    defp profile_event(extra \\ %{}),
+      do:
+        struct!(
+          Event.UserProfileUpdated,
+          base(Map.merge(%{user_id: "u1", version: 3, name: "Ana"}, extra))
+        )
+
+    test "keeps the name of the user" do
+      expect(DeliveryRepoMock, :apply_user_name, fn "u1", "Ana", 3 -> {:ok, :applied} end)
+
+      assert Lifecycle.handle(profile_event()) == :ok
+    end
+
+    test "an older version is ignored" do
+      expect(DeliveryRepoMock, :apply_user_name, fn _id, _name, _version -> {:ok, :stale} end)
+
+      assert Lifecycle.handle(profile_event()) == {:ignored, :stale}
+    end
+
+    test "a storage failure is returned so the event is retried" do
+      expect(DeliveryRepoMock, :apply_user_name, fn _id, _name, _version -> {:error, :timeout} end)
+
+      assert Lifecycle.handle(profile_event()) == {:error, :timeout}
+    end
+  end
+
+  describe "servers.server_updated" do
+    defp server_event,
+      do: struct!(Event.ServerUpdated, base(%{server_id: "s1", name: "Mi server"}))
+
+    test "keeps the name of the server" do
+      expect(DeliveryRepoMock, :apply_server_name, fn "s1", "Mi server", @at ->
+        {:ok, :applied}
+      end)
+
+      assert Lifecycle.handle(server_event()) == :ok
+    end
+
+    test "an older snapshot is ignored and a failure is returned" do
+      expect(DeliveryRepoMock, :apply_server_name, fn _id, _name, _at -> {:ok, :stale} end)
+      expect(DeliveryRepoMock, :apply_server_name, fn _id, _name, _at -> {:error, :timeout} end)
+
+      assert Lifecycle.handle(server_event()) == {:ignored, :stale}
+      assert Lifecycle.handle(server_event()) == {:error, :timeout}
+    end
+  end
+
+  describe "messaging.user_presence_changed" do
+    defp presence_event(extra \\ %{}) do
+      struct!(
+        Event.UserPresenceChanged,
+        base(
+          Map.merge(
+            %{user_id: "u1", connections: "active", do_not_disturb: false, version: 5},
+            extra
+          )
+        )
+      )
+    end
+
+    test "keeps the state with an expiry as a safety net" do
+      expect(DeliveryRepoMock, :apply_presence, fn "u1", "active", false, 5, expires_at ->
+        assert DateTime.diff(expires_at, DateTime.utc_now()) in 21_590..21_600
+        {:ok, :applied}
+      end)
+
+      assert Lifecycle.handle(presence_event()) == :ok
+    end
+
+    test "an older version is ignored and a failure is returned" do
+      expect(DeliveryRepoMock, :apply_presence, fn _u, _c, _d, _v, _at -> {:ok, :stale} end)
+      expect(DeliveryRepoMock, :apply_presence, fn _u, _c, _d, _v, _at -> {:error, :timeout} end)
+
+      assert Lifecycle.handle(presence_event()) == {:ignored, :stale}
+      assert Lifecycle.handle(presence_event()) == {:error, :timeout}
     end
   end
 end

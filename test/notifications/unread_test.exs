@@ -13,7 +13,9 @@ defmodule Notifications.UnreadTest do
   @m2 "00000000-0000-7000-8000-000000000002"
   @m3 "00000000-0000-7000-8000-000000000003"
 
-  defp stub_visible(channels \\ ["c1"]) do
+  defp stub_visible(channels \\ ["c1"], opts \\ []) do
+    joined = Keyword.get(opts, :joined, ~U[1970-01-01 00:00:00Z])
+
     stub(RepoMock, :list_memberships, fn @me ->
       {:ok,
        [
@@ -21,7 +23,7 @@ defmodule Notifications.UnreadTest do
            "server_id" => @s1,
            "user_id" => @me,
            "role_ids" => ["everyone"],
-           "joined_at" => ~U[1970-01-01 00:00:00Z]
+           "joined_at" => joined
          }
        ]}
     end)
@@ -45,6 +47,7 @@ defmodule Notifications.UnreadTest do
     end)
 
     stub(RepoMock, :list_overrides, fn _ids -> {:ok, []} end)
+    stub(RepoMock, :list_settings, fn @me -> {:ok, []} end)
   end
 
   describe "snapshot/1" do
@@ -62,10 +65,96 @@ defmodule Notifications.UnreadTest do
                    "server_id" => @s1,
                    "unread" => true,
                    "mention" => true,
-                   "channels" => [%{"channel_id" => "c1", "unread" => true, "mention" => true}]
+                   "notify" => true,
+                   "muted" => false,
+                   "channels" => [
+                     %{
+                       "channel_id" => "c1",
+                       "unread" => true,
+                       "mention" => true,
+                       "notify" => true,
+                       "muted" => false
+                     }
+                   ]
                  }
-               ]
+               ],
+               "muted" => %{"servers" => [], "channels" => []},
+               "preferences" => %{"servers" => %{}, "channels" => %{}}
              }
+    end
+
+    test "CA1: a muted channel stays unread but its mention is not highlighted" do
+      stub_visible(["c1", "c2"])
+
+      stub(RepoMock, :list_settings, fn @me ->
+        {:ok, [%{"scope" => "channel", "scope_id" => "c1", "server_id" => @s1, "muted" => true}]}
+      end)
+
+      expect(RepoMock, :get_activity, fn _ids -> {:ok, %{"c1" => @m3, "c2" => @m3}} end)
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{}} end)
+
+      expect(RepoMock, :get_mention_markers, fn @me, _ids ->
+        {:ok, %{"c1" => @m3, "c2" => @m3}}
+      end)
+
+      assert {:ok, state} = Unread.snapshot(@me)
+
+      assert Notifications.Unread.State.channel_flags(state, "c1") ==
+               %{unread: true, mention: false, notify: false, muted: true}
+
+      assert Notifications.Unread.State.channel_flags(state, "c2") ==
+               %{unread: true, mention: true, notify: true, muted: false}
+    end
+
+    test "CA2: a muted server mutes all of its channels" do
+      stub_visible(["c1", "c2"])
+
+      stub(RepoMock, :list_settings, fn @me ->
+        {:ok, [%{"scope" => "server", "scope_id" => @s1, "server_id" => @s1, "muted" => true}]}
+      end)
+
+      expect(RepoMock, :get_activity, fn _ids -> {:ok, %{"c1" => @m3, "c2" => @m3}} end)
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{}} end)
+      expect(RepoMock, :get_mention_markers, fn @me, _ids -> {:ok, %{"c1" => @m3}} end)
+
+      assert {:ok, state} = Unread.snapshot(@me)
+
+      assert Notifications.Unread.State.server_flags(state, @s1) ==
+               %{unread: true, mention: false, notify: false, muted: true}
+    end
+
+    test "CA2: the snapshot applies the channel level over the server level" do
+      stub_visible(["c1", "c2"])
+
+      stub(RepoMock, :list_settings, fn @me ->
+        {:ok,
+         [
+           %{"scope" => "server", "scope_id" => @s1, "server_id" => @s1, "level" => "none"},
+           %{"scope" => "channel", "scope_id" => "c1", "server_id" => @s1, "level" => "all"}
+         ]}
+      end)
+
+      expect(RepoMock, :get_activity, fn _ids -> {:ok, %{"c1" => @m3, "c2" => @m3}} end)
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{}} end)
+      expect(RepoMock, :get_mention_markers, fn @me, _ids -> {:ok, %{"c2" => @m3}} end)
+
+      assert {:ok, state} = Unread.snapshot(@me)
+
+      assert Notifications.Unread.State.channel_flags(state, "c1") ==
+               %{unread: true, mention: false, notify: true, muted: false}
+
+      assert Notifications.Unread.State.channel_flags(state, "c2") ==
+               %{unread: true, mention: false, notify: false, muted: false}
+    end
+
+    test "propagates a failure reading the mutes" do
+      stub_visible()
+      expect(RepoMock, :get_activity, fn _ids -> {:ok, %{}} end)
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{}} end)
+      expect(RepoMock, :get_mention_markers, fn @me, _ids -> {:ok, %{}} end)
+      stub(RepoMock, :list_settings, fn @me -> {:error, :timeout} end)
+
+      assert Unread.snapshot(@me) == {:error, :timeout}
     end
 
     test "a user without memberships gets an empty state" do
@@ -77,6 +166,7 @@ defmodule Notifications.UnreadTest do
       stub(RepoMock, :get_activity, fn [] -> {:ok, %{}} end)
       stub(RepoMock, :get_read_markers, fn @me, [] -> {:ok, %{}} end)
       stub(RepoMock, :get_mention_markers, fn @me, [] -> {:ok, %{}} end)
+      stub(RepoMock, :list_settings, fn @me -> {:ok, []} end)
 
       assert {:ok, %{}} = Unread.snapshot(@me)
     end
@@ -171,6 +261,85 @@ defmodule Notifications.UnreadTest do
       expect(RepoMock, :get_channel, fn "c1" -> {:error, :timeout} end)
 
       assert Unread.mark_read(@me, "c1") == {:error, :timeout}
+    end
+  end
+
+  describe "mark_all_read/1" do
+    test "CA2: marks every channel with unread content up to its last message" do
+      stub_visible(["c1", "c2", "c3"])
+
+      expect(RepoMock, :get_activity, fn ["c1", "c2", "c3"] ->
+        {:ok, %{"c1" => @m3, "c2" => @m2, "c3" => @m1}}
+      end)
+
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{"c2" => @m2, "c3" => @m1}} end)
+
+      expect(RepoMock, :mark_all_read, fn @me, entries ->
+        assert entries == [%{channel_id: "c1", server_id: @s1, message_id: @m3}]
+        :ok
+      end)
+
+      assert Unread.mark_all_read(@me) == {:ok, 1}
+    end
+
+    test "covers channels of every server and every kind of unread" do
+      stub_visible(["c1", "c2"])
+      expect(RepoMock, :get_activity, fn _ids -> {:ok, %{"c1" => @m2, "c2" => @m3}} end)
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{"c1" => @m1}} end)
+
+      expect(RepoMock, :mark_all_read, fn @me, entries ->
+        assert Enum.sort_by(entries, & &1.channel_id) == [
+                 %{channel_id: "c1", server_id: @s1, message_id: @m2},
+                 %{channel_id: "c2", server_id: @s1, message_id: @m3}
+               ]
+
+        :ok
+      end)
+
+      assert Unread.mark_all_read(@me) == {:ok, 2}
+    end
+
+    test "does not write anything when nothing is unread" do
+      stub_visible(["c1"])
+      expect(RepoMock, :get_activity, fn _ids -> {:ok, %{"c1" => @m2}} end)
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{"c1" => @m3}} end)
+
+      assert Unread.mark_all_read(@me) == {:ok, 0}
+    end
+
+    test "messages from before the member joined are not touched" do
+      stub_visible(["c1"], joined: ~U[2026-10-01 00:00:00Z])
+      expect(RepoMock, :get_activity, fn _ids -> {:ok, %{"c1" => @m3}} end)
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{}} end)
+
+      assert Unread.mark_all_read(@me) == {:ok, 0}
+    end
+
+    test "a user without channels has nothing to mark" do
+      stub(RepoMock, :list_memberships, fn @me -> {:ok, []} end)
+      stub(RepoMock, :get_server_owners, fn [] -> {:ok, %{}} end)
+      stub(RepoMock, :list_roles, fn [] -> {:ok, []} end)
+      stub(RepoMock, :list_channels, fn [] -> {:ok, []} end)
+      stub(RepoMock, :list_overrides, fn [] -> {:ok, []} end)
+      stub(RepoMock, :get_activity, fn [] -> {:ok, %{}} end)
+      stub(RepoMock, :get_read_markers, fn @me, [] -> {:ok, %{}} end)
+
+      assert Unread.mark_all_read(@me) == {:ok, 0}
+    end
+
+    test "propagates a storage failure when reading or writing" do
+      stub_visible(["c1"])
+      expect(RepoMock, :get_activity, fn _ids -> {:ok, %{"c1" => @m2}} end)
+      expect(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, %{}} end)
+      expect(RepoMock, :mark_all_read, fn @me, _entries -> {:error, :timeout} end)
+
+      assert Unread.mark_all_read(@me) == {:error, :timeout}
+    end
+
+    test "propagates a failure while reading the replica" do
+      expect(RepoMock, :list_memberships, fn @me -> {:error, :timeout} end)
+
+      assert Unread.mark_all_read(@me) == {:error, :timeout}
     end
   end
 

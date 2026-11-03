@@ -20,7 +20,10 @@ defmodule NotificationsWeb.NotificationsChannelTest do
   @m3 "00000000-0000-7000-8000-000000000003"
 
   setup do
-    {:ok, world} = Agent.start_link(fn -> %{channels: [@c1, @c2], activity: %{}, reads: %{}} end)
+    {:ok, world} =
+      Agent.start_link(fn ->
+        %{channels: [@c1, @c2], activity: %{}, reads: %{}, mutes: []}
+      end)
 
     stub(RepoMock, :list_memberships, fn @me ->
       {:ok,
@@ -54,6 +57,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
     end)
 
     stub(RepoMock, :list_overrides, fn _ids -> {:ok, []} end)
+    stub(RepoMock, :list_settings, fn @me -> {:ok, Agent.get(world, & &1.mutes)} end)
     stub(RepoMock, :get_activity, fn _ids -> {:ok, Agent.get(world, & &1.activity)} end)
     stub(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, Agent.get(world, & &1.reads)} end)
     stub(RepoMock, :get_mention_markers, fn @me, _ids -> {:ok, %{}} end)
@@ -221,6 +225,247 @@ defmodule NotificationsWeb.NotificationsChannelTest do
     end
   end
 
+  describe "muted" do
+    test "CA1: the snapshot keeps a muted channel unread and lists what is muted", %{world: world} do
+      put_world(world, :activity, %{@c1 => @m1})
+
+      put_world(world, :mutes, [
+        %{"scope" => "channel", "scope_id" => @c1, "server_id" => @s1, "muted" => true}
+      ])
+
+      join_own()
+
+      assert_push "snapshot", %{
+        "servers" => [
+          %{
+            "unread" => true,
+            "mention" => false,
+            "muted" => false,
+            "channels" => [%{"channel_id" => @c1, "unread" => true, "muted" => true}]
+          }
+        ],
+        "muted" => %{"servers" => [], "channels" => [@c1]}
+      }
+    end
+
+    test "CA1: a mention in a muted channel is unread activity without highlight", %{world: world} do
+      put_world(world, :mutes, [
+        %{"scope" => "channel", "scope_id" => @c1, "server_id" => @s1, "muted" => true}
+      ])
+
+      join_own()
+      assert_push "snapshot", _
+
+      message_created(@c1, @m1, mentions: [@me])
+
+      assert_push "unread_updated", %{
+        "channel_id" => @c1,
+        "unread" => true,
+        "mention" => false,
+        "muted" => true,
+        "server" => %{"unread" => true, "mention" => false, "muted" => false}
+      }
+    end
+
+    test "CA2: no channel of a muted server is highlighted", %{world: world} do
+      put_world(world, :mutes, [
+        %{"scope" => "server", "scope_id" => @s1, "server_id" => @s1, "muted" => true}
+      ])
+
+      join_own()
+      assert_push "snapshot", %{"muted" => %{"servers" => [@s1], "channels" => []}}
+
+      message_created(@c1, @m1, mentions: [@me])
+      assert_push "unread_updated", %{"channel_id" => @c1, "mention" => false, "muted" => true}
+
+      message_created(@c2, @m2, mentions: [@me])
+
+      assert_push "unread_updated", %{
+        "channel_id" => @c2,
+        "mention" => false,
+        "server" => %{"unread" => true, "mention" => false, "muted" => true}
+      }
+    end
+
+    test "muting from another session reaches this one through a resync", %{world: world} do
+      stub(RepoMock, :put_setting, fn @me, :channel, @c1, @s1, %{muted: true} ->
+        put_world(world, :mutes, [
+          %{"scope" => "channel", "scope_id" => @c1, "server_id" => @s1, "muted" => true}
+        ])
+
+        :ok
+      end)
+
+      stub(RepoMock, :get_setting, fn @me, @c1 ->
+        %{"scope_id" => @c1, "muted" => true, "level" => nil}
+      end)
+
+      join_own()
+      assert_push "snapshot", %{"muted" => %{"channels" => []}}
+
+      assert {:ok, %{muted: true}} =
+               Notifications.Settings.update_channel(@me, @c1, %{muted: true})
+
+      assert_push "snapshot", %{"muted" => %{"channels" => [@c1]}}
+    end
+
+    test "CA3: after unmuting, the next mention is highlighted again", %{world: world} do
+      put_world(world, :mutes, [
+        %{"scope" => "channel", "scope_id" => @c1, "server_id" => @s1, "muted" => true}
+      ])
+
+      stub(RepoMock, :put_setting, fn @me, :channel, @c1, nil, %{muted: false} ->
+        put_world(world, :mutes, [])
+      end)
+
+      stub(RepoMock, :get_setting, fn @me, @c1 -> nil end)
+      join_own()
+      assert_push "snapshot", %{"muted" => %{"channels" => [@c1]}}
+
+      assert {:ok, %{muted: false}} =
+               Notifications.Settings.update_channel(@me, @c1, %{muted: false})
+
+      assert_push "snapshot", %{"muted" => %{"channels" => []}}
+
+      message_created(@c1, @m1, mentions: [@me])
+
+      assert_push "unread_updated", %{"channel_id" => @c1, "mention" => true, "muted" => false}
+    end
+  end
+
+  describe "preferences" do
+    defp level_doc(scope, id, level),
+      do: %{"scope" => scope, "scope_id" => id, "server_id" => @s1, "level" => level}
+
+    test "the snapshot lists the stored preferences", %{world: world} do
+      put_world(world, :mutes, [
+        level_doc("server", @s1, "none"),
+        level_doc("channel", @c2, "all")
+      ])
+
+      join_own()
+
+      assert_push "snapshot", %{
+        "preferences" => %{"servers" => %{@s1 => "none"}, "channels" => %{@c2 => "all"}}
+      }
+    end
+
+    test "CA1: with the default level only mentions notify" do
+      join_own()
+      assert_push "snapshot", _
+
+      message_created(@c1, @m1)
+      assert_push "unread_updated", %{"unread" => true, "mention" => false, "notify" => false}
+
+      message_created(@c1, @m2, mentions: [@me])
+      assert_push "unread_updated", %{"mention" => true, "notify" => true}
+    end
+
+    test "CA1: level all makes every message notify, still without faking a mention", %{
+      world: world
+    } do
+      put_world(world, :mutes, [level_doc("server", @s1, "all")])
+      join_own()
+      assert_push "snapshot", _
+
+      message_created(@c1, @m1)
+
+      assert_push "unread_updated", %{
+        "channel_id" => @c1,
+        "unread" => true,
+        "mention" => false,
+        "notify" => true,
+        "muted" => false,
+        "server" => %{"notify" => true}
+      }
+    end
+
+    test "CA1: level none keeps the channel unread but nothing notifies, mentions included", %{
+      world: world
+    } do
+      put_world(world, :mutes, [level_doc("server", @s1, "none")])
+      join_own()
+      assert_push "snapshot", _
+
+      message_created(@c1, @m1, mentions: [@me])
+
+      assert_push "unread_updated", %{
+        "unread" => true,
+        "mention" => false,
+        "notify" => false,
+        "muted" => false,
+        "server" => %{"unread" => true, "notify" => false}
+      }
+    end
+
+    test "CA2: the channel preference wins over the server one", %{world: world} do
+      put_world(world, :mutes, [
+        level_doc("server", @s1, "none"),
+        level_doc("channel", @c1, "all")
+      ])
+
+      join_own()
+      assert_push "snapshot", _
+
+      message_created(@c1, @m1)
+      assert_push "unread_updated", %{"channel_id" => @c1, "notify" => true}
+
+      message_created(@c2, @m2, mentions: [@me])
+      assert_push "unread_updated", %{"channel_id" => @c2, "notify" => false, "mention" => false}
+    end
+
+    test "CA2: the other way around, a quiet channel inside a noisy server", %{world: world} do
+      put_world(world, :mutes, [
+        level_doc("server", @s1, "all"),
+        level_doc("channel", @c1, "none")
+      ])
+
+      join_own()
+      assert_push "snapshot", _
+
+      message_created(@c1, @m1, mentions: [@me])
+      assert_push "unread_updated", %{"channel_id" => @c1, "notify" => false}
+
+      message_created(@c2, @m2)
+      assert_push "unread_updated", %{"channel_id" => @c2, "notify" => true}
+    end
+
+    test "a mute always beats a more permissive level", %{world: world} do
+      put_world(world, :mutes, [
+        %{"scope" => "server", "scope_id" => @s1, "server_id" => @s1, "muted" => true},
+        level_doc("channel", @c1, "all")
+      ])
+
+      join_own()
+      assert_push "snapshot", _
+
+      message_created(@c1, @m1, mentions: [@me])
+
+      assert_push "unread_updated", %{"unread" => true, "notify" => false, "muted" => true}
+    end
+
+    test "changing the level from another session reaches this one through a resync", %{
+      world: world
+    } do
+      stub(RepoMock, :put_setting, fn @me, :server, @s1, @s1, %{level: "all"} ->
+        put_world(world, :mutes, [level_doc("server", @s1, "all")])
+      end)
+
+      stub(RepoMock, :get_setting, fn @me, @s1 ->
+        %{"scope_id" => @s1, "muted" => false, "level" => "all"}
+      end)
+
+      join_own()
+      assert_push "snapshot", %{"preferences" => %{"servers" => servers}}
+      assert servers == %{}
+
+      assert {:ok, %{muted: false, level: "all"}} =
+               Notifications.Settings.update_server(@me, @s1, %{level: "all"})
+
+      assert_push "snapshot", %{"preferences" => %{"servers" => %{@s1 => "all"}}}
+    end
+  end
+
   describe "mark_read" do
     test "CA1/CA2: reading a channel clears it and its server and tells the user's other sessions" do
       expect(RepoMock, :mark_read, fn @me, @c1, @s1, @m1 -> :ok end)
@@ -320,6 +565,95 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       ref = push(socket, "mark_read", %{})
 
       assert_reply ref, :error, %{error: %{code: "INVALID_PAYLOAD"}}
+    end
+  end
+
+  describe "mark_all_read" do
+    setup %{world: world} do
+      stub(RepoMock, :mark_all_read, fn @me, entries ->
+        Agent.update(world, fn state ->
+          reads = Map.new(entries, &{&1.channel_id, &1.message_id})
+          %{state | reads: Map.merge(state.reads, reads)}
+        end)
+
+        :ok
+      end)
+
+      :ok
+    end
+
+    test "CA2: clears every unread indicator and replies with how many channels were cleared", %{
+      world: world
+    } do
+      put_world(world, :activity, %{@c1 => @m2, @c2 => @m3})
+      socket = join_own()
+      assert_push "snapshot", %{"servers" => [%{"channels" => [_a, _b]}]}
+
+      ref = push(socket, "mark_all_read", %{})
+
+      assert_reply ref, :ok, %{"channels" => 2}
+      assert_push "snapshot", %{"servers" => []}
+    end
+
+    test "CA2: mentions disappear too", %{world: world} do
+      put_world(world, :activity, %{@c1 => @m2})
+      stub(RepoMock, :get_mention_markers, fn @me, _ids -> {:ok, %{@c1 => @m2}} end)
+      socket = join_own()
+      assert_push "snapshot", %{"servers" => [%{"mention" => true}]}
+
+      ref = push(socket, "mark_all_read", %{})
+
+      assert_reply ref, :ok, %{"channels" => 1}
+      assert_push "snapshot", %{"servers" => []}
+    end
+
+    test "the user's other sessions are cleared as well", %{world: world} do
+      put_world(world, :activity, %{@c1 => @m2})
+      first = join_own()
+      assert_push "snapshot", %{"servers" => [_one]}
+      other = join_own()
+      assert_push "snapshot", %{"servers" => [_one]}
+
+      ref = push(first, "mark_all_read", %{})
+
+      assert_reply ref, :ok
+      assert_push "snapshot", %{"servers" => []}
+      assert_push "snapshot", %{"servers" => []}
+      assert Process.alive?(other.channel_pid)
+    end
+
+    test "with nothing unread it replies ok with zero", %{world: _world} do
+      socket = join_own()
+      assert_push "snapshot", %{"servers" => []}
+
+      ref = push(socket, "mark_all_read", %{})
+
+      assert_reply ref, :ok, %{"channels" => 0}
+    end
+
+    test "messages that arrive afterwards are unread again", %{world: world} do
+      put_world(world, :activity, %{@c1 => @m1})
+      socket = join_own()
+      assert_push "snapshot", _
+
+      ref = push(socket, "mark_all_read", %{})
+      assert_reply ref, :ok
+      assert_push "snapshot", %{"servers" => []}
+
+      message_created(@c1, @m2)
+
+      assert_push "unread_updated", %{"channel_id" => @c1, "unread" => true}
+    end
+
+    test "a storage failure is reported as unavailable", %{world: world} do
+      put_world(world, :activity, %{@c1 => @m2})
+      stub(RepoMock, :mark_all_read, fn _user, _entries -> {:error, :timeout} end)
+      socket = join_own()
+      assert_push "snapshot", _
+
+      ref = push(socket, "mark_all_read", %{})
+
+      assert_reply ref, :error, %{error: %{code: "UNREAD_UNAVAILABLE"}}
     end
   end
 

@@ -12,7 +12,8 @@ if mongo_url do
 
     @collections ~w(
       channels event_clocks channel_activity read_markers mention_markers
-      replica_servers replica_roles replica_members replica_overrides
+      replica_servers replica_roles replica_members replica_overrides notification_settings
+      notification_history
     )
 
     setup do
@@ -181,6 +182,46 @@ if mongo_url do
         assert id == message_id(5)
       end
 
+      test "mark_all_read writes a marker per channel in one go", %{server: s, user: u} do
+        entries =
+          for n <- 1..5, do: %{channel_id: "c#{n}-#{u}", server_id: s, message_id: message_id(n)}
+
+        assert Repo.mark_all_read(u, entries) == :ok
+
+        ids = Enum.map(entries, & &1.channel_id)
+        assert {:ok, markers} = Repo.get_read_markers(u, ids)
+        assert map_size(markers) == 5
+        assert markers["c3-#{u}"] == message_id(3)
+      end
+
+      test "mark_all_read never moves a marker backwards and is repeatable", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        Repo.mark_read(u, c, s, message_id(9))
+
+        assert Repo.mark_all_read(u, [%{channel_id: c, server_id: s, message_id: message_id(4)}]) ==
+                 :ok
+
+        assert Repo.mark_all_read(u, [%{channel_id: c, server_id: s, message_id: message_id(4)}]) ==
+                 :ok
+
+        assert {:ok, %{^c => id}} = Repo.get_read_markers(u, [c])
+        assert id == message_id(9)
+      end
+
+      test "mark_all_read leaves other users alone", %{server: s, channel: c, user: u} do
+        Repo.mark_all_read(u, [%{channel_id: c, server_id: s, message_id: message_id(4)}])
+
+        assert {:ok, markers} = Repo.get_read_markers("someone-else", [c])
+        assert markers == %{}
+      end
+
+      test "mark_all_read with nothing to write is a no-op", %{user: u} do
+        assert Repo.mark_all_read(u, []) == :ok
+      end
+
       test "queries with no channels are empty" do
         assert Repo.get_activity([]) == {:ok, %{}}
         assert Repo.get_read_markers("u", []) == {:ok, %{}}
@@ -249,6 +290,476 @@ if mongo_url do
 
       test "a user without memberships gets an empty list" do
         assert {:ok, []} = Repo.list_memberships("nobody")
+      end
+    end
+
+    describe "settings" do
+      test "lists what the user configured and nothing from other users", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        assert :ok = Repo.put_setting(u, :server, s, s, %{muted: true})
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{level: "all"})
+        assert :ok = Repo.put_setting("someone-else", :channel, c, s, %{muted: true})
+
+        assert {:ok, docs} = Repo.list_settings(u)
+
+        assert docs |> Enum.map(&{&1["scope"], &1["scope_id"], &1["server_id"]}) |> Enum.sort() ==
+                 Enum.sort([{"server", s, s}, {"channel", c, s}])
+      end
+
+      test "a first write stores the identity and defaults the other field", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{level: "none"})
+
+        assert %{
+                 "user_id" => ^u,
+                 "scope" => "channel",
+                 "scope_id" => ^c,
+                 "server_id" => ^s,
+                 "muted" => false,
+                 "level" => "none"
+               } = Repo.get_setting(u, c)
+      end
+
+      test "writing one field keeps the other", %{server: s, channel: c, user: u} do
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+        :ok = Repo.put_setting(u, :channel, c, s, %{level: "all"})
+
+        assert %{"muted" => true, "level" => "all"} = Repo.get_setting(u, c)
+
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: false})
+
+        assert %{"muted" => false, "level" => "all"} = Repo.get_setting(u, c)
+      end
+
+      test "repeating a write keeps a single document", %{server: s, channel: c, user: u} do
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+
+        assert {:ok, [_one]} = Repo.list_settings(u)
+      end
+
+      test "CA3: unmuting a setting that has nothing else removes the document", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{muted: false})
+
+        assert Repo.get_setting(u, c) == nil
+        assert {:ok, []} = Repo.list_settings(u)
+      end
+
+      test "clearing the level of an unmuted setting removes the document", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_setting(u, :channel, c, s, %{level: "all"})
+
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{level: nil})
+
+        assert Repo.get_setting(u, c) == nil
+      end
+
+      test "clearing the level keeps a muted setting", %{server: s, channel: c, user: u} do
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true, level: "all"})
+
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{level: nil})
+
+        assert %{"muted" => true, "level" => nil} = Repo.get_setting(u, c)
+      end
+
+      test "unmuting keeps a setting that still has a level", %{server: s, channel: c, user: u} do
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true, level: "none"})
+
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{muted: false})
+
+        assert %{"muted" => false, "level" => "none"} = Repo.get_setting(u, c)
+      end
+
+      test "clearing something that never existed leaves nothing behind", %{
+        channel: c,
+        user: u
+      } do
+        assert :ok = Repo.put_setting(u, :channel, c, nil, %{muted: false, level: nil})
+
+        assert Repo.get_setting(u, c) == nil
+        assert {:ok, []} = Repo.list_settings(u)
+      end
+
+      test "clearing never overwrites the server the setting belongs to", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true, level: "all"})
+
+        assert :ok = Repo.put_setting(u, :channel, c, nil, %{level: nil})
+
+        assert %{"server_id" => ^s} = Repo.get_setting(u, c)
+      end
+
+      test "settings of other users are never touched", %{server: s, channel: c, user: u} do
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+        :ok = Repo.put_setting("someone-else", :channel, c, s, %{muted: true})
+
+        assert :ok = Repo.put_setting(u, :channel, c, s, %{muted: false})
+
+        assert %{"muted" => true} = Repo.get_setting("someone-else", c)
+      end
+
+      test "deleting a channel removes everybody's settings of it", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_setting(u, :channel, c, s, %{level: "all"})
+        :ok = Repo.put_setting("someone-else", :channel, c, s, %{muted: true})
+        :ok = Repo.put_setting(u, :server, s, s, %{muted: true})
+
+        assert :ok = Repo.delete_channel(c)
+
+        assert {:ok, [%{"scope" => "server"}]} = Repo.list_settings(u)
+        assert {:ok, []} = Repo.list_settings("someone-else")
+      end
+
+      test "deleting a server removes its settings and the ones of its channels", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_setting(u, :server, s, s, %{level: "none"})
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+        :ok = Repo.put_setting(u, :channel, "other-channel", "other-server", %{level: "all"})
+
+        assert :ok = Repo.delete_server_data(s, [c])
+
+        assert {:ok, [%{"scope_id" => "other-channel"}]} = Repo.list_settings(u)
+      end
+
+      test "leaving a server removes only that user's settings of it", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_setting(u, :server, s, s, %{level: "all"})
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+        :ok = Repo.put_setting(u, :channel, "other-channel", "other-server", %{level: "all"})
+        :ok = Repo.put_setting("someone-else", :channel, c, s, %{muted: true})
+
+        assert {:ok, :applied} = Repo.delete_member(s, u, @t2)
+
+        assert {:ok, [%{"scope_id" => "other-channel"}]} = Repo.list_settings(u)
+        assert {:ok, [_one]} = Repo.list_settings("someone-else")
+      end
+    end
+
+    describe "history" do
+      defp history_item(user, n, attrs) do
+        Map.merge(
+          %{
+            "_id" => user <> ":" <> message_id(n),
+            "user_id" => user,
+            "kind" => "mention",
+            "message_id" => message_id(n),
+            "author_id" => "author",
+            "occurred_at" => @t1,
+            "expires_at" => DateTime.add(@t1, 7 * 24 * 60 * 60, :second)
+          },
+          attrs
+        )
+      end
+
+      defp mention_item(user, n, server, channel),
+        do: history_item(user, n, %{"server_id" => server, "channel_id" => channel})
+
+      defp dm_item(user, n),
+        do: history_item(user, n, %{"kind" => "direct_message", "conversation_id" => "conv"})
+
+      defp ids(items), do: Enum.map(items, & &1["message_id"])
+
+      test "lists a user's entries newest first and nobody else's", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok =
+          Repo.put_history([
+            mention_item(u, 1, s, c),
+            dm_item(u, 3),
+            mention_item("other", 2, s, c)
+          ])
+
+        assert {:ok, items} = Repo.list_history(u, nil, 50)
+        assert ids(items) == [message_id(3), message_id(1)]
+      end
+
+      test "an entry without expiry is stored and listed", %{server: s, channel: c, user: u} do
+        item = u |> mention_item(1, s, c) |> Map.delete("expires_at")
+
+        :ok = Repo.put_history([item])
+
+        assert {:ok, [stored]} = Repo.list_history(u, nil, 50)
+        assert stored["message_id"] == message_id(1)
+        refute Map.has_key?(stored, "expires_at")
+      end
+
+      test "stores the entry with everything the page needs", %{server: s, channel: c, user: u} do
+        :ok = Repo.put_history([mention_item(u, 1, s, c)])
+
+        assert {:ok, [item]} = Repo.list_history(u, nil, 50)
+
+        assert %{
+                 "user_id" => ^u,
+                 "kind" => "mention",
+                 "server_id" => ^s,
+                 "channel_id" => ^c,
+                 "author_id" => "author",
+                 "occurred_at" => %DateTime{},
+                 "expires_at" => %DateTime{}
+               } = item
+      end
+
+      test "writing the same entry again keeps a single one, untouched", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_history([mention_item(u, 1, s, c)])
+
+        :ok =
+          Repo.put_history([history_item(u, 1, %{"server_id" => s, "channel_id" => "changed"})])
+
+        assert {:ok, [%{"channel_id" => ^c}]} = Repo.list_history(u, nil, 50)
+      end
+
+      test "paginates with the cursor", %{server: s, channel: c, user: u} do
+        :ok = Repo.put_history(for n <- 1..5, do: mention_item(u, n, s, c))
+
+        assert {:ok, first} = Repo.list_history(u, nil, 2)
+        assert ids(first) == [message_id(5), message_id(4)]
+
+        assert {:ok, second} = Repo.list_history(u, {@t1, message_id(4)}, 2)
+        assert ids(second) == [message_id(3), message_id(2)]
+
+        assert {:ok, last} = Repo.list_history(u, {@t1, message_id(2)}, 2)
+        assert ids(last) == [message_id(1)]
+
+        assert {:ok, []} = Repo.list_history(u, {@t1, message_id(1)}, 2)
+      end
+
+      test "orders by when it happened, not by the message id", %{server: s, channel: c, user: u} do
+        oldest = "ffffffff-ffff-5fff-8fff-ffffffffffff"
+        middle = "00000000-0000-5000-8000-000000000000"
+        newest = "80000000-0000-5000-8000-000000000000"
+
+        :ok =
+          Repo.put_history([
+            mention_item(u, 1, s, c) |> hashed(oldest, @t1),
+            mention_item(u, 2, s, c) |> hashed(middle, @t2),
+            mention_item(u, 3, s, c) |> hashed(newest, DateTime.add(@t2, 1, :second))
+          ])
+
+        assert {:ok, items} = Repo.list_history(u, nil, 50)
+        assert ids(items) == [newest, middle, oldest]
+      end
+
+      test "pages through entries with hashed ids without skipping or repeating", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        hashed = for n <- 1..6, do: "#{n}0000000-0000-5000-8000-00000000000#{7 - n}"
+
+        :ok =
+          Repo.put_history(
+            hashed
+            |> Enum.with_index()
+            |> Enum.map(fn {id, index} ->
+              mention_item(u, index + 1, s, c) |> hashed(id, DateTime.add(@t1, index, :second))
+            end)
+          )
+
+        newest_first = Enum.reverse(hashed)
+        assert {:ok, first} = Repo.list_history(u, nil, 2)
+        assert ids(first) == Enum.take(newest_first, 2)
+
+        position = fn items ->
+          {List.last(items)["occurred_at"], List.last(items)["message_id"]}
+        end
+
+        assert {:ok, second} = Repo.list_history(u, position.(first), 2)
+        assert ids(second) == newest_first |> Enum.drop(2) |> Enum.take(2)
+
+        assert {:ok, third} = Repo.list_history(u, position.(second), 2)
+        assert ids(third) == Enum.drop(newest_first, 4)
+
+        assert {:ok, []} = Repo.list_history(u, position.(third), 2)
+      end
+
+      test "entries with the same instant are split by message id, in both directions", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_history(for n <- 1..3, do: mention_item(u, n, s, c))
+
+        assert {:ok, [only]} = Repo.list_history(u, {@t1, message_id(3)}, 1)
+        assert only["message_id"] == message_id(2)
+
+        assert {:ok, older} =
+                 Repo.list_history(u, {DateTime.add(@t1, 1, :second), message_id(1)}, 50)
+
+        assert ids(older) == [message_id(3), message_id(2), message_id(1)]
+      end
+
+      defp hashed(item, id, at) do
+        item
+        |> Map.put("_id", item["user_id"] <> ":" <> id)
+        |> Map.put("message_id", id)
+        |> Map.put("occurred_at", at)
+      end
+
+      test "an empty history is an empty list", %{user: u} do
+        assert {:ok, []} = Repo.list_history(u, nil, 50)
+      end
+
+      test "writing nothing is fine" do
+        assert :ok = Repo.put_history([])
+      end
+
+      test "lists the settings of the given users for the given scopes only", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+        :ok = Repo.put_setting(u, :server, s, s, %{level: "none"})
+        :ok = Repo.put_setting(u, :channel, "unrelated", s, %{muted: true})
+        :ok = Repo.put_setting("not-asked", :channel, c, s, %{muted: true})
+
+        assert {:ok, docs} = Repo.list_settings_for([u, "missing"], [c, s])
+
+        assert docs |> Enum.map(&{&1["user_id"], &1["scope_id"]}) |> Enum.sort() ==
+                 Enum.sort([{u, c}, {u, s}])
+      end
+
+      test "list_settings_by_scope/1 returns every user's settings for those scopes", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+        :ok = Repo.put_setting("other-" <> u, :server, s, s, %{level: "all"})
+        :ok = Repo.put_setting(u, :channel, "unrelated", s, %{muted: true})
+
+        assert {:ok, docs} = Repo.list_settings_by_scope([c, s])
+
+        assert docs |> Enum.map(&{&1["user_id"], &1["scope_id"]}) |> Enum.sort() ==
+                 Enum.sort([{u, c}, {"other-" <> u, s}])
+      end
+
+      test "lists who has a mention entry for a message and deletes entries by message", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok =
+          Repo.put_history([
+            mention_item(u, 1, s, c),
+            mention_item("other-" <> u, 1, s, c),
+            mention_item(u, 2, s, c)
+          ])
+
+        assert {:ok, users} = Repo.list_history_mention_users(message_id(1))
+        assert Enum.sort(users) == Enum.sort([u, "other-" <> u])
+
+        assert Repo.delete_history_entries(message_id(1), []) == :ok
+        assert Repo.delete_history_entries(message_id(1), ["other-" <> u]) == :ok
+        assert Repo.list_history_mention_users(message_id(1)) == {:ok, [u]}
+
+        assert Repo.delete_history_entries(message_id(1), :all) == :ok
+        assert Repo.list_history_mention_users(message_id(1)) == {:ok, []}
+        assert {:ok, [%{"message_id" => id}]} = Repo.list_history(u, nil, 10)
+        assert id == message_id(2)
+      end
+
+      test "deleting a channel removes its mention entries and keeps the rest", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok =
+          Repo.put_history([
+            mention_item(u, 1, s, c),
+            mention_item("other", 2, s, c),
+            mention_item(u, 3, s, "another-channel"),
+            dm_item(u, 4)
+          ])
+
+        assert :ok = Repo.delete_channel(c)
+
+        assert {:ok, items} = Repo.list_history(u, nil, 50)
+        assert ids(items) == [message_id(4), message_id(3)]
+        assert {:ok, []} = Repo.list_history("other", nil, 50)
+      end
+
+      test "deleting a server removes its mention entries and keeps the direct messages", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok =
+          Repo.put_history([
+            mention_item(u, 1, s, c),
+            mention_item(u, 2, "another-server", "another-channel"),
+            dm_item(u, 3)
+          ])
+
+        assert :ok = Repo.delete_server_data(s, [c])
+
+        assert {:ok, items} = Repo.list_history(u, nil, 50)
+        assert ids(items) == [message_id(3), message_id(2)]
+      end
+
+      test "leaving a server removes only that user's entries of it", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok =
+          Repo.put_history([
+            mention_item(u, 1, s, c),
+            mention_item("other", 2, s, c),
+            mention_item(u, 3, "another-server", "another-channel"),
+            dm_item(u, 4)
+          ])
+
+        assert {:ok, :applied} = Repo.delete_member(s, u, @t2)
+
+        assert {:ok, items} = Repo.list_history(u, nil, 50)
+        assert ids(items) == [message_id(4), message_id(3)]
+        assert {:ok, [_one]} = Repo.list_history("other", nil, 50)
+      end
+
+      test "the indexes include the expiry of the entries" do
+        assert :ok = Repo.ensure_indexes()
+
+        names =
+          Notifications.Mongo
+          |> Mongo.list_indexes("notification_history")
+          |> Enum.map(& &1["name"])
+
+        assert "history_expires_at_ttl" in names
+        assert "by_user_timeline" in names
       end
     end
 

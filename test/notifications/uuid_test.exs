@@ -47,4 +47,20 @@ defmodule Notifications.UUIDTest do
       part |> Integer.to_string(16) |> String.downcase() |> String.pad_leading(width, "0")
     end)
   end
+
+  describe "v7?/1" do
+    test "accepts a UUIDv7" do
+      assert UUID.v7?("00000000-0000-7000-8000-000000000001")
+      assert UUID.v7?(UUID.floor_v7(~U[2026-10-31 12:00:00Z]))
+    end
+
+    test "rejects other versions, malformed text and non-strings" do
+      refute UUID.v7?(UUID.generate())
+      refute UUID.v7?("00000000-0000-7000-8000-00000000000")
+      refute UUID.v7?("nope")
+      refute UUID.v7?("")
+      refute UUID.v7?(nil)
+      refute UUID.v7?(7)
+    end
+  end
 end

@@ -1,7 +1,9 @@
 defmodule Notifications.Events.Lifecycle do
   require Logger
 
+  alias Notifications.Delivery
   alias Notifications.Events.Event
+  alias Notifications.History
   alias Notifications.Push
   alias Notifications.Unread.Repo
 
@@ -132,6 +134,7 @@ defmodule Notifications.Events.Lifecycle do
              author_id: event.author_id,
              mentioned_user_ids: event.mentioned_user_ids
            }),
+         :ok <- History.record_mentions(event),
          :ok <-
            Push.publish("server:" <> event.server_id, "message_created", %{
              "server_id" => event.server_id,
@@ -139,13 +142,80 @@ defmodule Notifications.Events.Lifecycle do
              "message_id" => event.message_id,
              "author_id" => event.author_id,
              "mentioned_user_ids" => event.mentioned_user_ids
-           }) do
+           }),
+         :ok <- Delivery.notify(event) do
       Logger.debug("message_activity_recorded",
         channel_id: event.channel_id,
         message_id: event.message_id
       )
     else
       other -> outcome(other, "messaging.message_created")
+    end
+  end
+
+  def handle(%Event.MessageUpdated{} = event) do
+    with :alive <- server_state(event.server_id),
+         :alive <- channel_state(event.channel_id),
+         {:ok, added} <- History.sync_mentions(event),
+         :ok <- Delivery.notify_edit(event, added) do
+      Logger.debug("message_edit_applied", message_id: event.message_id, count: length(added))
+    else
+      other -> outcome(other, "messaging.message_updated")
+    end
+  end
+
+  def handle(%Event.MessageDeleted{} = event) do
+    with :ok <- History.forget(event.message_id) do
+      Logger.debug("message_delete_applied", message_id: event.message_id)
+    else
+      other -> outcome(other, "messaging.message_deleted")
+    end
+  end
+
+  def handle(%Event.DirectMessageCreated{} = event) do
+    with :ok <- History.record_direct(event),
+         :ok <- Delivery.notify(event) do
+      Logger.debug("direct_message_recorded",
+        conversation_id: event.conversation_id,
+        message_id: event.message_id
+      )
+    else
+      other -> outcome(other, "messaging.direct_message_created")
+    end
+  end
+
+  def handle(%Event.UserProfileUpdated{} = event) do
+    with {:ok, :applied} <-
+           delivery_repo().apply_user_name(event.user_id, event.name, event.version) do
+      Logger.debug("user_name_applied", user_id: event.user_id)
+    else
+      other -> outcome(other, "users.profile_updated")
+    end
+  end
+
+  def handle(%Event.ServerUpdated{} = event) do
+    with {:ok, :applied} <-
+           delivery_repo().apply_server_name(event.server_id, event.name, event.occurred_at) do
+      Logger.debug("server_name_applied", server_id: event.server_id)
+    else
+      other -> outcome(other, "servers.server_updated")
+    end
+  end
+
+  def handle(%Event.UserPresenceChanged{} = event) do
+    expires_at = DateTime.add(DateTime.utc_now(), presence_ttl_seconds(), :second)
+
+    with {:ok, :applied} <-
+           delivery_repo().apply_presence(
+             event.user_id,
+             event.connections,
+             event.do_not_disturb,
+             event.version,
+             expires_at
+           ) do
+      Logger.debug("presence_applied", user_id: event.user_id)
+    else
+      other -> outcome(other, "messaging.user_presence_changed")
     end
   end
 
@@ -192,6 +262,8 @@ defmodule Notifications.Events.Lifecycle do
   end
 
   defp repo, do: Repo.impl()
+  defp delivery_repo, do: Notifications.Delivery.Repo.impl()
+  defp presence_ttl_seconds, do: Notifications.Delivery.Config.get(:presence_ttl_seconds)
 
   defp tombstone_expiry, do: DateTime.add(DateTime.utc_now(), @tombstone_ttl_seconds, :second)
 

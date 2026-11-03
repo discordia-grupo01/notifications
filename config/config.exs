@@ -10,6 +10,7 @@ config :logger, :console,
   metadata: [
     :request_id,
     :channel_id,
+    :conversation_id,
     :server_id,
     :message_id,
     :user_id,
@@ -36,6 +37,8 @@ config :logger, :console,
     :result,
     :transport,
     :version,
+    :provider,
+    :device_id,
     :log_level
   ]
 

@@ -37,14 +37,30 @@ defmodule Notifications.Unread.StateTest do
     test "a channel without messages is read" do
       state = State.build(visible(), %{}, %{}, %{})
 
-      assert State.channel_flags(state, @c1) == %{unread: false, mention: false}
+      assert State.channel_flags(state, @c1) == %{
+               unread: false,
+               mention: false,
+               notify: false,
+               muted: false
+             }
     end
 
     test "CA1: a channel with a message newer than the last read is unread" do
       state = State.build(visible(), %{@c1 => @m2}, %{@c1 => @m1}, %{})
 
-      assert State.channel_flags(state, @c1) == %{unread: true, mention: false}
-      assert State.channel_flags(state, @c2) == %{unread: false, mention: false}
+      assert State.channel_flags(state, @c1) == %{
+               unread: true,
+               mention: false,
+               notify: false,
+               muted: false
+             }
+
+      assert State.channel_flags(state, @c2) == %{
+               unread: false,
+               mention: false,
+               notify: false,
+               muted: false
+             }
     end
 
     test "a channel read up to its last message is read" do
@@ -58,28 +74,43 @@ defmodule Notifications.Unread.StateTest do
       visible = [%{channel_id: @c1, server_id: @s1, floor: floor}]
 
       assert State.build(visible, %{@c1 => @m1}, %{}, %{}) |> State.channel_flags(@c1) ==
-               %{unread: false, mention: false}
+               %{unread: false, mention: false, notify: false, muted: false}
 
       assert State.build(visible, %{@c1 => @m3}, %{}, %{}) |> State.channel_flags(@c1) ==
-               %{unread: true, mention: false}
+               %{unread: true, mention: false, notify: false, muted: false}
     end
 
     test "CA3: a mention newer than the baseline marks the channel as mention and unread" do
       state = State.build(visible(), %{@c1 => @m2}, %{@c1 => @m1}, %{@c1 => @m2})
 
-      assert State.channel_flags(state, @c1) == %{unread: true, mention: true}
+      assert State.channel_flags(state, @c1) == %{
+               unread: true,
+               mention: true,
+               notify: true,
+               muted: false
+             }
     end
 
     test "CA3: a mention that was already read is only a plain read channel" do
       state = State.build(visible(), %{@c1 => @m2}, %{@c1 => @m2}, %{@c1 => @m2})
 
-      assert State.channel_flags(state, @c1) == %{unread: false, mention: false}
+      assert State.channel_flags(state, @c1) == %{
+               unread: false,
+               mention: false,
+               notify: false,
+               muted: false
+             }
     end
 
     test "a mention older than the last read does not stay highlighted when newer plain messages arrive" do
       state = State.build(visible(), %{@c1 => @m3}, %{@c1 => @m2}, %{@c1 => @m1})
 
-      assert State.channel_flags(state, @c1) == %{unread: true, mention: false}
+      assert State.channel_flags(state, @c1) == %{
+               unread: true,
+               mention: false,
+               notify: false,
+               muted: false
+             }
     end
   end
 
@@ -90,7 +121,12 @@ defmodule Notifications.Unread.StateTest do
         |> State.build(%{}, %{}, %{})
         |> State.message_created(@me, event(@c1, @m1))
 
-      assert State.channel_flags(state, @c1) == %{unread: true, mention: false}
+      assert State.channel_flags(state, @c1) == %{
+               unread: true,
+               mention: false,
+               notify: false,
+               muted: false
+             }
     end
 
     test "the author's own message never makes the channel unread for them" do
@@ -99,7 +135,12 @@ defmodule Notifications.Unread.StateTest do
         |> State.build(%{}, %{}, %{})
         |> State.message_created(@me, event(@c1, @m1, author: @me))
 
-      assert State.channel_flags(state, @c1) == %{unread: false, mention: false}
+      assert State.channel_flags(state, @c1) == %{
+               unread: false,
+               mention: false,
+               notify: false,
+               muted: false
+             }
     end
 
     test "the author's message also clears older unread messages" do
@@ -117,7 +158,12 @@ defmodule Notifications.Unread.StateTest do
         |> State.build(%{}, %{}, %{})
         |> State.message_created(@me, event(@c1, @m1, mentions: [@me]))
 
-      assert State.channel_flags(state, @c1) == %{unread: true, mention: true}
+      assert State.channel_flags(state, @c1) == %{
+               unread: true,
+               mention: true,
+               notify: true,
+               muted: false
+             }
     end
 
     test "CA3: a message that mentions someone else is not a mention for the user" do
@@ -126,7 +172,12 @@ defmodule Notifications.Unread.StateTest do
         |> State.build(%{}, %{}, %{})
         |> State.message_created(@me, event(@c1, @m1, mentions: [@other]))
 
-      assert State.channel_flags(state, @c1) == %{unread: true, mention: false}
+      assert State.channel_flags(state, @c1) == %{
+               unread: true,
+               mention: false,
+               notify: false,
+               muted: false
+             }
     end
 
     test "an event for a channel the user cannot see is ignored" do
@@ -154,7 +205,12 @@ defmodule Notifications.Unread.StateTest do
         |> State.build(%{@c1 => @m2}, %{}, %{@c1 => @m2})
         |> State.mark_read(@c1, @m2)
 
-      assert State.channel_flags(state, @c1) == %{unread: false, mention: false}
+      assert State.channel_flags(state, @c1) == %{
+               unread: false,
+               mention: false,
+               notify: false,
+               muted: false
+             }
     end
 
     test "a read marker never goes backwards" do
@@ -188,26 +244,52 @@ defmodule Notifications.Unread.StateTest do
     test "CA2: a server is unread when at least one of its channels is" do
       state = State.build(visible(), %{@c2 => @m1}, %{}, %{})
 
-      assert State.server_flags(state, @s1) == %{unread: true, mention: false}
-      assert State.server_flags(state, @s2) == %{unread: false, mention: false}
+      assert State.server_flags(state, @s1) == %{
+               unread: true,
+               mention: false,
+               notify: false,
+               muted: false
+             }
+
+      assert State.server_flags(state, @s2) == %{
+               unread: false,
+               mention: false,
+               notify: false,
+               muted: false
+             }
     end
 
     test "CA2: a server with every channel read is read" do
       state = State.build(visible(), %{@c1 => @m1, @c2 => @m1}, %{@c1 => @m1, @c2 => @m1}, %{})
 
-      assert State.server_flags(state, @s1) == %{unread: false, mention: false}
+      assert State.server_flags(state, @s1) == %{
+               unread: false,
+               mention: false,
+               notify: false,
+               muted: false
+             }
     end
 
     test "CA3: a mention in any channel highlights the whole server" do
       state = State.build(visible(), %{@c1 => @m1, @c2 => @m2}, %{}, %{@c2 => @m2})
 
-      assert State.server_flags(state, @s1) == %{unread: true, mention: true}
+      assert State.server_flags(state, @s1) == %{
+               unread: true,
+               mention: true,
+               notify: true,
+               muted: false
+             }
     end
 
     test "an unknown server is read" do
       state = State.build(visible(), %{@c1 => @m1}, %{}, %{})
 
-      assert State.server_flags(state, "nope") == %{unread: false, mention: false}
+      assert State.server_flags(state, "nope") == %{
+               unread: false,
+               mention: false,
+               notify: false,
+               muted: false
+             }
     end
   end
 
@@ -222,20 +304,46 @@ defmodule Notifications.Unread.StateTest do
                    "server_id" => @s1,
                    "unread" => true,
                    "mention" => false,
-                   "channels" => [%{"channel_id" => @c1, "unread" => true, "mention" => false}]
+                   "notify" => false,
+                   "muted" => false,
+                   "channels" => [
+                     %{
+                       "channel_id" => @c1,
+                       "unread" => true,
+                       "mention" => false,
+                       "notify" => false,
+                       "muted" => false
+                     }
+                   ]
                  },
                  %{
                    "server_id" => @s2,
                    "unread" => true,
                    "mention" => true,
-                   "channels" => [%{"channel_id" => @c3, "unread" => true, "mention" => true}]
+                   "notify" => true,
+                   "muted" => false,
+                   "channels" => [
+                     %{
+                       "channel_id" => @c3,
+                       "unread" => true,
+                       "mention" => true,
+                       "notify" => true,
+                       "muted" => false
+                     }
+                   ]
                  }
-               ]
+               ],
+               "muted" => %{"servers" => [], "channels" => []},
+               "preferences" => %{"servers" => %{}, "channels" => %{}}
              }
     end
 
     test "is empty when everything is read" do
-      assert State.snapshot(State.build(visible(), %{}, %{}, %{})) == %{"servers" => []}
+      assert State.snapshot(State.build(visible(), %{}, %{}, %{})) == %{
+               "servers" => [],
+               "muted" => %{"servers" => [], "channels" => []},
+               "preferences" => %{"servers" => %{}, "channels" => %{}}
+             }
     end
   end
 
@@ -250,7 +358,14 @@ defmodule Notifications.Unread.StateTest do
                "channel_id" => @c1,
                "unread" => true,
                "mention" => true,
-               "server" => %{"unread" => true, "mention" => true}
+               "notify" => true,
+               "muted" => false,
+               "server" => %{
+                 "unread" => true,
+                 "mention" => true,
+                 "notify" => true,
+                 "muted" => false
+               }
              }
     end
 
@@ -260,6 +375,350 @@ defmodule Notifications.Unread.StateTest do
         |> State.build(%{@c1 => @m1, @c2 => @m1}, %{@c1 => @m1}, %{})
 
       assert %{"unread" => false, "server" => %{"unread" => true}} = State.change(state, @c1)
+    end
+  end
+
+  defp settings(opts \\ []) do
+    %{
+      muted_servers: MapSet.new(Keyword.get(opts, :muted_servers, [])),
+      muted_channels: MapSet.new(Keyword.get(opts, :muted_channels, [])),
+      server_levels: Map.new(Keyword.get(opts, :server_levels, [])),
+      channel_levels: Map.new(Keyword.get(opts, :channel_levels, []))
+    }
+  end
+
+  describe "apply_settings/2 (mutes)" do
+    defp muted(servers, channels),
+      do: settings(muted_servers: servers, muted_channels: channels)
+
+    defp with_mutes(servers, channels, activity, mentions) do
+      visible()
+      |> State.build(activity, %{}, mentions)
+      |> State.apply_settings(muted(servers, channels))
+    end
+
+    test "CA1: a muted channel stays unread but loses the highlighted mention" do
+      state = with_mutes([], [@c1], %{@c1 => @m1}, %{@c1 => @m1})
+
+      assert State.channel_flags(state, @c1) == %{
+               unread: true,
+               mention: false,
+               notify: false,
+               muted: true
+             }
+    end
+
+    test "CA1: new messages in a muted channel keep counting as unread activity" do
+      state =
+        with_mutes([], [@c1], %{}, %{})
+        |> State.message_created(@me, event(@c1, @m2, mentions: [@me]))
+
+      assert State.channel_flags(state, @c1) == %{
+               unread: true,
+               mention: false,
+               notify: false,
+               muted: true
+             }
+    end
+
+    test "muting one channel does not touch its siblings" do
+      state = with_mutes([], [@c1], %{@c1 => @m1, @c2 => @m1}, %{@c1 => @m1, @c2 => @m1})
+
+      assert State.channel_flags(state, @c2) == %{
+               unread: true,
+               mention: true,
+               notify: true,
+               muted: false
+             }
+
+      assert State.server_flags(state, @s1) == %{
+               unread: true,
+               mention: true,
+               notify: true,
+               muted: false
+             }
+    end
+
+    test "CA2: a muted server mutes every one of its channels and only its own" do
+      state =
+        with_mutes([@s1], [], %{@c1 => @m1, @c2 => @m1, @c3 => @m1}, %{
+          @c1 => @m1,
+          @c3 => @m1
+        })
+
+      assert State.channel_flags(state, @c1) == %{
+               unread: true,
+               mention: false,
+               notify: false,
+               muted: true
+             }
+
+      assert State.channel_flags(state, @c2) == %{
+               unread: true,
+               mention: false,
+               notify: false,
+               muted: true
+             }
+
+      assert State.channel_flags(state, @c3) == %{
+               unread: true,
+               mention: true,
+               notify: true,
+               muted: false
+             }
+
+      assert State.server_flags(state, @s1) == %{
+               unread: true,
+               mention: false,
+               notify: false,
+               muted: true
+             }
+
+      assert State.server_flags(state, @s2) == %{
+               unread: true,
+               mention: true,
+               notify: true,
+               muted: false
+             }
+    end
+
+    test "CA3: removing the mute brings the highlight back" do
+      muted_state = with_mutes([@s1], [@c1], %{@c1 => @m1}, %{@c1 => @m1})
+      state = State.apply_settings(muted_state, muted([], []))
+
+      assert State.channel_flags(state, @c1) == %{
+               unread: true,
+               mention: true,
+               notify: true,
+               muted: false
+             }
+
+      assert State.server_flags(state, @s1).muted == false
+    end
+
+    test "reading a muted channel clears its unread indicator" do
+      state =
+        with_mutes([], [@c1], %{@c1 => @m1}, %{@c1 => @m1})
+        |> State.mark_read(@c1, @m1)
+
+      assert State.channel_flags(state, @c1) == %{
+               unread: false,
+               mention: false,
+               notify: false,
+               muted: true
+             }
+    end
+
+    test "the snapshot lists what is muted even when nothing is unread" do
+      state = with_mutes([@s2], [@c2, @c1], %{}, %{})
+
+      assert State.snapshot(state) == %{
+               "servers" => [],
+               "muted" => %{"servers" => [@s2], "channels" => [@c1, @c2]},
+               "preferences" => %{"servers" => %{}, "channels" => %{}}
+             }
+    end
+
+    test "the snapshot flags muted channels and servers that have unread activity" do
+      state = with_mutes([@s1], [], %{@c1 => @m1}, %{@c1 => @m1})
+
+      assert %{
+               "servers" => [
+                 %{
+                   "server_id" => @s1,
+                   "unread" => true,
+                   "mention" => false,
+                   "muted" => true,
+                   "channels" => [%{"channel_id" => @c1, "mention" => false, "muted" => true}]
+                 }
+               ]
+             } = State.snapshot(state)
+    end
+
+    test "change/2 reports the muted flag of the channel and of its server" do
+      state = with_mutes([@s1], [], %{@c1 => @m1}, %{@c1 => @m1})
+
+      assert %{
+               "unread" => true,
+               "mention" => false,
+               "muted" => true,
+               "server" => %{"unread" => true, "mention" => false, "muted" => true}
+             } = State.change(state, @c1)
+    end
+  end
+
+  describe "apply_settings/2 (levels)" do
+    defp with_levels(opts, activity, mentions \\ %{}) do
+      visible()
+      |> State.build(activity, %{}, mentions)
+      |> State.apply_settings(settings(opts))
+    end
+
+    test "CA1: with no preference only a mention notifies" do
+      state = with_levels([], %{@c1 => @m1, @c2 => @m1}, %{@c2 => @m1})
+
+      assert State.channel_flags(state, @c1) == %{
+               unread: true,
+               mention: false,
+               notify: false,
+               muted: false
+             }
+
+      assert State.channel_flags(state, @c2) == %{
+               unread: true,
+               mention: true,
+               notify: true,
+               muted: false
+             }
+    end
+
+    test "CA1: level all makes plain messages notify without turning them into mentions" do
+      state = with_levels([server_levels: [{@s1, "all"}]], %{@c1 => @m1})
+
+      assert State.channel_flags(state, @c1) == %{
+               unread: true,
+               mention: false,
+               notify: true,
+               muted: false
+             }
+    end
+
+    test "CA1: level all does not notify a channel that was already read" do
+      state =
+        [server_levels: [{@s1, "all"}]]
+        |> with_levels(%{@c1 => @m1})
+        |> State.mark_read(@c1, @m1)
+
+      assert State.channel_flags(state, @c1) == %{
+               unread: false,
+               mention: false,
+               notify: false,
+               muted: false
+             }
+    end
+
+    test "CA1: level mentions behaves like the default" do
+      state =
+        with_levels([server_levels: [{@s1, "mentions"}]], %{@c1 => @m1, @c2 => @m1}, %{@c2 => @m1})
+
+      assert State.channel_flags(state, @c1).notify == false
+      assert State.channel_flags(state, @c2).notify == true
+    end
+
+    test "CA1: level none keeps the channel unread but drops every notification, mentions included" do
+      state = with_levels([server_levels: [{@s1, "none"}]], %{@c1 => @m1}, %{@c1 => @m1})
+
+      assert State.channel_flags(state, @c1) == %{
+               unread: true,
+               mention: false,
+               notify: false,
+               muted: false
+             }
+    end
+
+    test "CA2: the channel level wins over the server level" do
+      state =
+        with_levels(
+          [server_levels: [{@s1, "none"}], channel_levels: [{@c1, "all"}]],
+          %{@c1 => @m1, @c2 => @m1},
+          %{@c2 => @m1}
+        )
+
+      assert State.channel_flags(state, @c1).notify == true
+
+      assert State.channel_flags(state, @c2) == %{
+               unread: true,
+               mention: false,
+               notify: false,
+               muted: false
+             }
+    end
+
+    test "CA2: a quiet channel inside a server that notifies everything" do
+      state =
+        with_levels(
+          [server_levels: [{@s1, "all"}], channel_levels: [{@c1, "none"}]],
+          %{@c1 => @m1, @c2 => @m1}
+        )
+
+      assert State.channel_flags(state, @c1).notify == false
+      assert State.channel_flags(state, @c2).notify == true
+    end
+
+    test "a server level reaches only its own channels" do
+      state = with_levels([server_levels: [{@s1, "all"}]], %{@c1 => @m1, @c3 => @m1})
+
+      assert State.channel_flags(state, @c1).notify == true
+      assert State.channel_flags(state, @c3).notify == false
+    end
+
+    test "a mute beats a more permissive level in the same or in the other scope" do
+      state =
+        with_levels(
+          [muted_servers: [@s1], channel_levels: [{@c1, "all"}], server_levels: [{@s1, "all"}]],
+          %{@c1 => @m1}
+        )
+
+      assert State.channel_flags(state, @c1) == %{
+               unread: true,
+               mention: false,
+               notify: false,
+               muted: true
+             }
+    end
+
+    test "removing the preference returns to the default" do
+      with_all = with_levels([server_levels: [{@s1, "all"}]], %{@c1 => @m1})
+      state = State.apply_settings(with_all, settings())
+
+      assert State.channel_flags(state, @c1).notify == false
+    end
+
+    test "the server notifies when any of its channels does" do
+      state = with_levels([channel_levels: [{@c2, "all"}]], %{@c1 => @m1, @c2 => @m1})
+
+      assert State.server_flags(state, @s1) == %{
+               unread: true,
+               mention: false,
+               notify: true,
+               muted: false
+             }
+    end
+
+    test "the server does not notify when none of its channels does" do
+      state = with_levels([server_levels: [{@s1, "none"}]], %{@c1 => @m1}, %{@c1 => @m1})
+
+      assert State.server_flags(state, @s1) == %{
+               unread: true,
+               mention: false,
+               notify: false,
+               muted: false
+             }
+    end
+
+    test "the snapshot lists the stored preferences, not the inherited ones" do
+      state = with_levels([server_levels: [{@s1, "all"}], channel_levels: [{@c2, "none"}]], %{})
+
+      assert %{"preferences" => %{"servers" => %{@s1 => "all"}, "channels" => %{@c2 => "none"}}} =
+               State.snapshot(state)
+    end
+
+    test "the snapshot and change/2 expose notify per channel and per server" do
+      state = with_levels([server_levels: [{@s1, "all"}]], %{@c1 => @m1})
+
+      assert %{"servers" => [%{"notify" => true, "channels" => [%{"notify" => true}]}]} =
+               State.snapshot(state)
+
+      assert %{"notify" => true, "server" => %{"notify" => true}} = State.change(state, @c1)
+    end
+
+    test "a new message in a channel with level all notifies" do
+      state =
+        [server_levels: [{@s1, "all"}]]
+        |> with_levels(%{})
+        |> State.message_created(@me, event(@c1, @m2))
+
+      assert State.channel_flags(state, @c1).notify == true
     end
   end
 

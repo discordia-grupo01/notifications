@@ -80,7 +80,7 @@ if rabbitmq_url && mongo_url do
 
     defp flags(user, channel) do
       case Unread.snapshot(user) do
-        {:ok, state} -> State.channel_flags(state, channel)
+        {:ok, state} -> state |> State.channel_flags(channel) |> Map.take([:unread, :mention])
         {:error, _reason} -> nil
       end
     end
@@ -128,7 +128,9 @@ if rabbitmq_url && mongo_url do
 
       assert wait_until(fn -> flags(me, channel) == %{unread: true, mention: false} end)
       assert {:ok, state} = Unread.snapshot(me)
-      assert State.server_flags(state, server) == %{unread: true, mention: false}
+
+      assert Map.take(State.server_flags(state, server), [:unread, :mention]) ==
+               %{unread: true, mention: false}
     end
 
     test "CA3: a message that mentions the member is flagged as a mention", ctx do
@@ -195,6 +197,40 @@ if rabbitmq_url && mongo_url do
       assert Notifications.Unread.Repo.Mongo.get_channel(channel) == nil
       assert {:ok, activity} = Notifications.Unread.Repo.Mongo.get_activity([channel])
       assert activity == %{}
+    end
+
+    test "CA2: marking everything as read clears every channel of every server", ctx do
+      %{chan: chan, server: server, channel: channel, me: me, other: other} = ctx
+      seed_membership(ctx)
+      second = "chan2-" <> server
+
+      publish(chan, "servers.channel_created", %{
+        "server_id" => server,
+        "channel_id" => second,
+        "name" => "random",
+        "kind" => "text"
+      })
+
+      for {id, mentions} <- [{channel, [me]}, {second, []}] do
+        publish(chan, "messaging.message_created", %{
+          "server_id" => server,
+          "channel_id" => id,
+          "message_id" => later(10),
+          "author_id" => other,
+          "mentioned_user_ids" => mentions
+        })
+      end
+
+      assert wait_until(fn ->
+               flags(me, channel) == %{unread: true, mention: true} and
+                 flags(me, second) == %{unread: true, mention: false}
+             end)
+
+      assert {:ok, 2} = Unread.mark_all_read(me)
+
+      assert flags(me, channel) == %{unread: false, mention: false}
+      assert flags(me, second) == %{unread: false, mention: false}
+      assert {:ok, 0} = Unread.mark_all_read(me)
     end
 
     test "reading the channel clears the indicators", ctx do
@@ -398,6 +434,118 @@ if rabbitmq_url && mongo_url do
 
         other ->
           other
+      end
+    end
+
+    test "CA1: a mention ends up in the history of whoever was mentioned", ctx do
+      %{chan: chan, server: server, channel: channel, me: me, other: other} = ctx
+      seed_membership(ctx)
+      message_id = later(10)
+
+      publish(chan, "messaging.message_created", %{
+        "server_id" => server,
+        "channel_id" => channel,
+        "message_id" => message_id,
+        "author_id" => other,
+        "mentioned_user_ids" => [me]
+      })
+
+      assert wait_until(fn -> history_ids(me) == [message_id] end)
+
+      assert {:ok, %{items: [item]}} = Notifications.History.list(me)
+      assert item["kind"] == "mention"
+      assert item["channel_id"] == channel
+      assert item["server_id"] == server
+      assert item["author_id"] == other
+    end
+
+    test "CA1: a direct message ends up in the history of its recipient, with no server involved",
+         ctx do
+      %{chan: chan, me: me, other: other} = ctx
+      message_id = later(10)
+
+      publish(chan, "messaging.direct_message_created", %{
+        "conversation_id" => "conv-" <> me,
+        "message_id" => message_id,
+        "author_id" => other,
+        "recipient_id" => me
+      })
+
+      assert wait_until(fn -> history_ids(me) == [message_id] end)
+
+      assert {:ok, %{items: [item]}} = Notifications.History.list(me)
+      assert item["kind"] == "direct_message"
+      assert item["conversation_id"] == "conv-" <> me
+      assert history_ids(other) == []
+    end
+
+    test "the history lists the newest first", ctx do
+      %{chan: chan, me: me, other: other} = ctx
+      older = later(10)
+      newer = later(20)
+
+      for message_id <- [older, newer] do
+        publish(chan, "messaging.direct_message_created", %{
+          "conversation_id" => "conv-" <> me,
+          "message_id" => message_id,
+          "author_id" => other,
+          "recipient_id" => me
+        })
+      end
+
+      assert wait_until(fn -> history_ids(me) == [newer, older] end)
+    end
+
+    test "a muted channel leaves no entry for the mention, a plain one does", ctx do
+      %{chan: chan, server: server, channel: channel, me: me, other: other} = ctx
+      seed_membership(ctx)
+
+      assert {:ok, %{muted: true}} =
+               Notifications.Settings.update_channel(me, channel, %{muted: true})
+
+      publish(chan, "messaging.message_created", %{
+        "server_id" => server,
+        "channel_id" => channel,
+        "message_id" => later(10),
+        "author_id" => other,
+        "mentioned_user_ids" => [me]
+      })
+
+      direct = later(20)
+
+      publish(chan, "messaging.direct_message_created", %{
+        "conversation_id" => "conv-" <> me,
+        "message_id" => direct,
+        "author_id" => other,
+        "recipient_id" => me
+      })
+
+      assert wait_until(fn -> history_ids(me) == [direct] end)
+    end
+
+    test "the same event delivered twice leaves a single entry", ctx do
+      %{chan: chan, me: me, other: other} = ctx
+      message_id = later(10)
+
+      payload = %{
+        "conversation_id" => "conv-" <> me,
+        "message_id" => message_id,
+        "author_id" => other,
+        "recipient_id" => me
+      }
+
+      publish(chan, "messaging.direct_message_created", payload)
+      publish(chan, "messaging.direct_message_created", payload)
+
+      assert wait_until(fn -> history_ids(me) == [message_id] end)
+      Process.sleep(300)
+      assert history_ids(me) == [message_id]
+    end
+
+    defp history_ids(user) do
+      case Notifications.History.list(user) do
+        {:ok, %{items: items}} -> Enum.map(items, & &1["message_id"])
+        {:error, _reason} -> nil
       end
     end
 
