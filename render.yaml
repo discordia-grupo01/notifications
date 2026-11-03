@@ -13,6 +13,10 @@ services:
         sync: false
       - key: RABBITMQ_URL
         sync: false
+      - key: TS_AUTHKEY
+        sync: false
+      - key: RABBITMQ_TS_HOST
+        value: 100.115.4.88
       - key: MONGO_POOL_SIZE
         value: "10"
       - key: LOG_LEVEL
