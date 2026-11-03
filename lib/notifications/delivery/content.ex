@@ -29,12 +29,6 @@ defmodule Notifications.Delivery.Content do
     end
   end
 
-  defp call_body(caller, "ringing"), do: "#{caller} te está llamando"
-  defp call_body(_caller, "missed"), do: "La llamada de voz no fue respondida"
-  defp call_body(_caller, "rejected"), do: "La llamada de voz fue rechazada"
-  defp call_body(_caller, "ended"), do: "La llamada de voz finalizó"
-  defp call_body(_caller, _status), do: "Actualización de llamada de voz"
-
   def build(%{conversation_id: conversation_id} = event) do
     with {:ok, author} <- user_name(event.author_id) do
       {:ok,
@@ -62,6 +56,12 @@ defmodule Notifications.Delivery.Content do
   end
 
   def build(%{server_id: _server_id, channel_id: _channel_id} = event), do: build_channel(event)
+
+  defp call_body(caller, "ringing"), do: "#{caller} te está llamando"
+  defp call_body(_caller, "missed"), do: "La llamada de voz no fue respondida"
+  defp call_body(_caller, "rejected"), do: "La llamada de voz fue rechazada"
+  defp call_body(_caller, "ended"), do: "La llamada de voz finalizó"
+  defp call_body(_caller, _status), do: "Actualización de llamada de voz"
 
   defp build_channel(%{server_id: server_id, channel_id: channel_id} = event) do
     with {:ok, author} <- user_name(event.author_id),
