@@ -9,6 +9,7 @@ defmodule Notifications.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
+      dialyzer: [plt_add_apps: [:mix]],
       test_coverage: [tool: ExCoveralls]
     ]
   end
@@ -16,7 +17,7 @@ defmodule Notifications.MixProject do
   def application do
     [
       mod: {Notifications.Application, []},
-      extra_applications: [:logger, :runtime_tools]
+      extra_applications: [:logger, :runtime_tools, :inets, :ssl]
     ]
   end
 

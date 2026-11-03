@@ -8,6 +8,9 @@ defmodule NotificationsWeb.ApiError do
           | :unread_unavailable
           | :settings_unavailable
           | :history_unavailable
+          | :device_limit
+          | :push_unavailable
+          | :push_not_configured
 
   @spec describe(reason()) :: {String.t(), String.t()}
   def describe(:forbidden),
@@ -37,16 +40,32 @@ defmodule NotificationsWeb.ApiError do
       {"HISTORY_UNAVAILABLE",
        "No se pudo consultar el historial de notificaciones, intentá de nuevo en un momento."}
 
+  def describe(:device_limit),
+    do:
+      {"DEVICE_LIMIT",
+       "Alcanzaste el máximo de dispositivos con notificaciones push, quitá alguno e intentá de nuevo."}
+
+  def describe(:push_unavailable),
+    do:
+      {"PUSH_UNAVAILABLE",
+       "No se pudo acceder a la configuración de notificaciones push, intentá de nuevo en un momento."}
+
+  def describe(:push_not_configured),
+    do: {"PUSH_NOT_CONFIGURED", "Las notificaciones push web no están configuradas."}
+
   @spec payload(reason(), map()) :: map()
   def payload(reason, details \\ %{}) do
     {code, message} = describe(reason)
     %{error: %{code: code, message: message, details: details}}
   end
 
-  @spec http_status(reason()) :: 400 | 403 | 404 | 503
+  @spec http_status(reason()) :: 400 | 403 | 404 | 409 | 503
   def http_status(:forbidden), do: 403
   def http_status(:channel_not_found), do: 404
   def http_status(:server_not_found), do: 404
+  def http_status(:device_limit), do: 409
+  def http_status(:push_unavailable), do: 503
+  def http_status(:push_not_configured), do: 404
   def http_status(:settings_unavailable), do: 503
   def http_status(:history_unavailable), do: 503
   def http_status(:ticket_unavailable), do: 503

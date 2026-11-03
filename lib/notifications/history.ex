@@ -47,6 +47,37 @@ defmodule Notifications.History do
     ])
   end
 
+  @spec sync_mentions(map()) :: {:ok, [String.t()]} | {:error, term()}
+  def sync_mentions(%{message_id: message_id, author_id: author_id} = event) do
+    mentioned = event.mentioned_user_ids |> Enum.reject(&(&1 == author_id)) |> Enum.uniq()
+
+    with {:ok, existing} <- Repo.impl().list_history_mention_users(message_id),
+         :ok <- drop_removed(message_id, existing -- mentioned),
+         {:ok, added} <- add_new(mentioned -- existing, event) do
+      {:ok, added}
+    end
+  end
+
+  @spec forget(String.t()) :: :ok | {:error, term()}
+  def forget(message_id), do: Repo.impl().delete_history_entries(message_id, :all)
+
+  defp drop_removed(_message_id, []), do: :ok
+  defp drop_removed(message_id, users), do: Repo.impl().delete_history_entries(message_id, users)
+
+  defp add_new([], _event), do: {:ok, []}
+
+  defp add_new(candidates, event) do
+    with {:ok, docs} <-
+           Repo.impl().list_settings_for(candidates, [event.channel_id, event.server_id]) do
+      docs_by_user = Enum.group_by(docs, & &1["user_id"])
+      added = Enum.filter(candidates, &notifies?(Map.get(docs_by_user, &1, []), event))
+
+      with :ok <- added |> Enum.map(&mention_item(&1, event)) |> put() do
+        {:ok, added}
+      end
+    end
+  end
+
   @spec list(String.t(), keyword()) :: {:ok, page()} | {:error, term()}
   def list(user_id, opts \\ []) do
     limit = Keyword.get(opts, :limit, @default_limit)

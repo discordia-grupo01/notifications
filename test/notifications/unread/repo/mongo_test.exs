@@ -652,6 +652,46 @@ if mongo_url do
                  Enum.sort([{u, c}, {u, s}])
       end
 
+      test "list_settings_by_scope/1 returns every user's settings for those scopes", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+        :ok = Repo.put_setting("other-" <> u, :server, s, s, %{level: "all"})
+        :ok = Repo.put_setting(u, :channel, "unrelated", s, %{muted: true})
+
+        assert {:ok, docs} = Repo.list_settings_by_scope([c, s])
+
+        assert docs |> Enum.map(&{&1["user_id"], &1["scope_id"]}) |> Enum.sort() ==
+                 Enum.sort([{u, c}, {"other-" <> u, s}])
+      end
+
+      test "lists who has a mention entry for a message and deletes entries by message", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok =
+          Repo.put_history([
+            mention_item(u, 1, s, c),
+            mention_item("other-" <> u, 1, s, c),
+            mention_item(u, 2, s, c)
+          ])
+
+        assert {:ok, users} = Repo.list_history_mention_users(message_id(1))
+        assert Enum.sort(users) == Enum.sort([u, "other-" <> u])
+
+        assert Repo.delete_history_entries(message_id(1), []) == :ok
+        assert Repo.delete_history_entries(message_id(1), ["other-" <> u]) == :ok
+        assert Repo.list_history_mention_users(message_id(1)) == {:ok, [u]}
+
+        assert Repo.delete_history_entries(message_id(1), :all) == :ok
+        assert Repo.list_history_mention_users(message_id(1)) == {:ok, []}
+        assert {:ok, [%{"message_id" => id}]} = Repo.list_history(u, nil, 10)
+        assert id == message_id(2)
+      end
+
       test "deleting a channel removes its mention entries and keeps the rest", %{
         server: s,
         channel: c,

@@ -14,7 +14,7 @@ defmodule Notifications.Unread.IndexSetup do
   def run(opts \\ []), do: attempt(1, Keyword.get(opts, :retry_ms, @default_retry_ms))
 
   defp attempt(n, retry_ms) do
-    case repo().ensure_indexes() do
+    case ensure_indexes() do
       :ok ->
         Logger.info("indexes_ready", attempts: n)
 
@@ -28,5 +28,9 @@ defmodule Notifications.Unread.IndexSetup do
     end
   end
 
-  defp repo, do: Notifications.Unread.Repo.impl()
+  defp ensure_indexes do
+    with :ok <- Notifications.Unread.Repo.impl().ensure_indexes() do
+      Notifications.Delivery.Repo.impl().ensure_indexes()
+    end
+  end
 end

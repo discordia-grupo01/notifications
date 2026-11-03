@@ -10,6 +10,18 @@ config :notifications, :start_amqp_consumers, false
 config :notifications, :ensure_indexes, false
 config :notifications, :unread_repo, Notifications.Unread.RepoMock
 config :notifications, :ticket_store, Notifications.Auth.TicketStoreMock
+config :notifications, :delivery_repo, Notifications.Delivery.RepoMock
+config :notifications, :delivery_http, Notifications.Delivery.HttpMock
+
+config :notifications, :push_senders, %{
+  "webpush" => Notifications.Delivery.SenderMock,
+  "expo" => Notifications.Delivery.SenderMock
+}
+
+config :notifications, :push_delivery,
+  retry_base_ms: 0,
+  retry_max_ms: 0,
+  max_concurrency: 5
 
 config :logger, level: :warning
 config :logger, :console, colors: [enabled: false]

@@ -37,6 +37,8 @@ config :logger, :console,
     :result,
     :transport,
     :version,
+    :provider,
+    :device_id,
     :log_level
   ]
 

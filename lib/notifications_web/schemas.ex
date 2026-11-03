@@ -221,4 +221,102 @@ defmodule NotificationsWeb.Schemas do
       required: [:items, :next_cursor]
     })
   end
+
+  defmodule PushDeviceRequest do
+    require OpenApiSpex
+
+    OpenApiSpex.schema(%{
+      title: "PushDeviceRequest",
+      type: :object,
+      description:
+        "Datos del dispositivo a registrar. Con `provider: expo` (app) va `token`; con `provider: webpush` (navegador) va la suscripción: `endpoint`, `p256dh` y `auth`. El token nunca viaja en la URL.",
+      properties: %{
+        provider: %Schema{type: :string, enum: ["webpush", "expo"]},
+        platform: %Schema{type: :string, enum: ["web", "android", "ios"]},
+        token: %Schema{
+          type: :string,
+          description: "Solo `expo`: `ExponentPushToken[...]` que entrega `expo-notifications`."
+        },
+        endpoint: %Schema{
+          type: :string,
+          description:
+            "Solo `webpush`: URL https del servicio de push del navegador (`PushSubscription.endpoint`)."
+        },
+        p256dh: %Schema{
+          type: :string,
+          description: "Solo `webpush`: clave pública del navegador, base64url (65 bytes)."
+        },
+        auth: %Schema{
+          type: :string,
+          description: "Solo `webpush`: secreto de autenticación, base64url (16 bytes)."
+        }
+      },
+      required: [:provider, :platform]
+    })
+  end
+
+  defmodule PushDevice do
+    require OpenApiSpex
+
+    OpenApiSpex.schema(%{
+      title: "PushDevice",
+      type: :object,
+      properties: %{
+        id: %Schema{
+          type: :string,
+          description: "Id opaco del dispositivo. Se usa para borrarlo; no contiene el token."
+        }
+      },
+      required: [:id]
+    })
+  end
+
+  defmodule PushSettingsRequest do
+    require OpenApiSpex
+
+    OpenApiSpex.schema(%{
+      title: "PushSettingsRequest",
+      type: :object,
+      properties: %{
+        enabled: %Schema{
+          type: :boolean,
+          description: "`false` apaga el push en todos los dispositivos."
+        }
+      },
+      required: [:enabled]
+    })
+  end
+
+  defmodule PushSettings do
+    require OpenApiSpex
+
+    OpenApiSpex.schema(%{
+      title: "PushSettings",
+      type: :object,
+      properties: %{
+        enabled: %Schema{
+          type: :boolean,
+          description: "`true` por defecto. No afecta los indicadores dentro de la app."
+        }
+      },
+      required: [:enabled]
+    })
+  end
+
+  defmodule VapidPublicKey do
+    require OpenApiSpex
+
+    OpenApiSpex.schema(%{
+      title: "VapidPublicKey",
+      type: :object,
+      properties: %{
+        public_key: %Schema{
+          type: :string,
+          description:
+            "Clave pública VAPID en base64url. Es el `applicationServerKey` de `pushManager.subscribe`."
+        }
+      },
+      required: [:public_key]
+    })
+  end
 end

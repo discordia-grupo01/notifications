@@ -134,6 +134,90 @@ components:
       type: object
       x-struct: Elixir.NotificationsWeb.Schemas.HistoryPage
       x-validate:
+    PushDevice:
+      properties:
+        id:
+          description: Id opaco del dispositivo. Se usa para borrarlo; no contiene el token.
+          type: string
+          x-struct:
+          x-validate:
+      required:
+        - id
+      title: PushDevice
+      type: object
+      x-struct: Elixir.NotificationsWeb.Schemas.PushDevice
+      x-validate:
+    PushDeviceRequest:
+      description: 'Datos del dispositivo a registrar. Con `provider: expo` (app) va `token`; con `provider: webpush` (navegador) va la suscripción: `endpoint`, `p256dh` y `auth`. El token nunca viaja en la URL.'
+      properties:
+        auth:
+          description: 'Solo `webpush`: secreto de autenticación, base64url (16 bytes).'
+          type: string
+          x-struct:
+          x-validate:
+        endpoint:
+          description: 'Solo `webpush`: URL https del servicio de push del navegador (`PushSubscription.endpoint`).'
+          type: string
+          x-struct:
+          x-validate:
+        p256dh:
+          description: 'Solo `webpush`: clave pública del navegador, base64url (65 bytes).'
+          type: string
+          x-struct:
+          x-validate:
+        platform:
+          enum:
+            - web
+            - android
+            - ios
+          type: string
+          x-struct:
+          x-validate:
+        provider:
+          enum:
+            - webpush
+            - expo
+          type: string
+          x-struct:
+          x-validate:
+        token:
+          description: 'Solo `expo`: `ExponentPushToken[...]` que entrega `expo-notifications`.'
+          type: string
+          x-struct:
+          x-validate:
+      required:
+        - provider
+        - platform
+      title: PushDeviceRequest
+      type: object
+      x-struct: Elixir.NotificationsWeb.Schemas.PushDeviceRequest
+      x-validate:
+    PushSettings:
+      properties:
+        enabled:
+          description: '`true` por defecto. No afecta los indicadores dentro de la app.'
+          type: boolean
+          x-struct:
+          x-validate:
+      required:
+        - enabled
+      title: PushSettings
+      type: object
+      x-struct: Elixir.NotificationsWeb.Schemas.PushSettings
+      x-validate:
+    PushSettingsRequest:
+      properties:
+        enabled:
+          description: '`false` apaga el push en todos los dispositivos.'
+          type: boolean
+          x-struct:
+          x-validate:
+      required:
+        - enabled
+      title: PushSettingsRequest
+      type: object
+      x-struct: Elixir.NotificationsWeb.Schemas.PushSettingsRequest
+      x-validate:
     ServerSetting:
       properties:
         level:
@@ -307,6 +391,19 @@ components:
       type: object
       x-struct: Elixir.NotificationsWeb.Schemas.SocketTicket
       x-validate:
+    VapidPublicKey:
+      properties:
+        public_key:
+          description: Clave pública VAPID en base64url. Es el `applicationServerKey` de `pushManager.subscribe`.
+          type: string
+          x-struct:
+          x-validate:
+      required:
+        - public_key
+      title: VapidPublicKey
+      type: object
+      x-struct: Elixir.NotificationsWeb.Schemas.VapidPublicKey
+      x-validate:
 info:
   description: 'Indicadores de no leído por canal y por servidor. Todo el estado viaja por WebSocket (canal `notifications:<user_id>` en `/notifications/socket`): al unirse se recibe el estado completo y después los cambios en vivo. Por REST se pide el ticket para abrir ese socket y se administran los silenciados de canales y servidores.'
   title: Discordia — Notifications
@@ -428,6 +525,186 @@ paths:
       summary: Historial de notificaciones del usuario
       tags:
         - history
+  /v1/notifications/push/devices:
+    post:
+      callbacks: {}
+      description: 'Se llama después de que el usuario da el permiso de notificaciones. El token o la suscripción viajan solo en el cuerpo. Es idempotente: registrar de nuevo el mismo dispositivo devuelve el mismo `id` (200) y, si estaba asociado a otro usuario, pasa a este. El máximo es de 10 dispositivos por usuario.'
+      operationId: NotificationsWeb.PushController.register_device
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PushDeviceRequest'
+        description: Dispositivo
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PushDevice'
+          description: El dispositivo ya estaba registrado
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PushDevice'
+          description: Dispositivo registrado
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Proveedor, plataforma o credenciales inválidos
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: 'Falta o es inválido el Authorization: Bearer <jwt>'
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Se alcanzó el máximo de dispositivos
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: No se pudo guardar el dispositivo
+      summary: Registra un dispositivo para recibir notificaciones push
+      tags:
+        - push
+  /v1/notifications/push/devices/{id}:
+    delete:
+      callbacks: {}
+      description: 'Se llama al cerrar sesión o al desactivar el permiso. Es idempotente: si el `id` no existe o es de otro usuario responde igual.'
+      operationId: NotificationsWeb.PushController.delete_device
+      parameters:
+        - description: Id devuelto al registrar el dispositivo
+          in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            x-struct:
+            x-validate:
+      responses:
+        '204':
+          description: Dispositivo quitado
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: 'Falta o es inválido el Authorization: Bearer <jwt>'
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: No se pudo quitar el dispositivo
+      summary: Quita un dispositivo de las notificaciones push
+      tags:
+        - push
+  /v1/notifications/push/settings:
+    get:
+      callbacks: {}
+      description: Es un interruptor único por usuario, válido para todos sus dispositivos. Por defecto está activado.
+      operationId: NotificationsWeb.PushController.show_settings
+      parameters: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PushSettings'
+          description: Estado del interruptor
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: 'Falta o es inválido el Authorization: Bearer <jwt>'
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: No se pudo leer la configuración
+      summary: Dice si el usuario recibe notificaciones push
+      tags:
+        - push
+    put:
+      callbacks: {}
+      description: 'Con `enabled: false` no se manda ningún push a ningún dispositivo del usuario. No cambia los indicadores ni el historial dentro de la app. Es idempotente.'
+      operationId: NotificationsWeb.PushController.update_settings
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PushSettingsRequest'
+        description: Estado deseado
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PushSettings'
+          description: Estado resultante
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: '`enabled` falta o no es booleano'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: 'Falta o es inválido el Authorization: Bearer <jwt>'
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: No se pudo guardar la configuración
+      summary: Activa o desactiva las notificaciones push del usuario
+      tags:
+        - push
+  /v1/notifications/push/vapid-public-key:
+    get:
+      callbacks: {}
+      operationId: NotificationsWeb.PushController.vapid_public_key
+      parameters: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VapidPublicKey'
+          description: Clave pública
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: 'Falta o es inválido el Authorization: Bearer <jwt>'
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: El push web no está configurado
+      summary: Clave pública VAPID para suscribir un navegador
+      tags:
+        - push
   /v1/notifications/settings:
     get:
       callbacks: {}

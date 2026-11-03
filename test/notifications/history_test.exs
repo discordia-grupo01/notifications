@@ -60,6 +60,86 @@ defmodule Notifications.HistoryTest do
     expect(RepoMock, :put_history, fn items -> send(test, {:history, items}) && :ok end)
   end
 
+  describe "sync_mentions/1" do
+    defp expect_existing(users),
+      do: expect(RepoMock, :list_history_mention_users, fn @m1 -> {:ok, users} end)
+
+    test "adds the entry of whoever the edit mentioned for the first time" do
+      expect_existing(["u2"])
+      expect_settings(["u3"], [])
+      capture_history()
+
+      assert History.sync_mentions(mention_event(%{mentioned_user_ids: ["u2", "u3"]})) ==
+               {:ok, ["u3"]}
+
+      assert_received {:history, [item]}
+      assert %{"_id" => "u3:" <> @m1, "kind" => "mention", "author_id" => "author"} = item
+    end
+
+    test "removes the entry of whoever the edit stopped mentioning, and keeps the rest" do
+      expect_existing(["u2", "u3"])
+      expect(RepoMock, :delete_history_entries, fn @m1, ["u3"] -> :ok end)
+
+      assert History.sync_mentions(mention_event(%{mentioned_user_ids: ["u2"]})) == {:ok, []}
+    end
+
+    test "adds and removes in the same edit" do
+      expect_existing(["u2"])
+      expect(RepoMock, :delete_history_entries, fn @m1, ["u2"] -> :ok end)
+      expect_settings(["u3"], [])
+      capture_history()
+
+      assert History.sync_mentions(mention_event(%{mentioned_user_ids: ["u3"]})) == {:ok, ["u3"]}
+    end
+
+    test "an edit that changes nothing touches nothing" do
+      expect_existing(["u2"])
+
+      assert History.sync_mentions(mention_event(%{mentioned_user_ids: ["u2"]})) == {:ok, []}
+    end
+
+    test "the author is never added" do
+      expect_existing([])
+
+      assert History.sync_mentions(mention_event(%{mentioned_user_ids: ["author"]})) == {:ok, []}
+    end
+
+    test "a muted channel or level none is not added, like when the message was created" do
+      expect_existing([])
+
+      expect_settings(["u2", "u3"], [
+        %{"user_id" => "u2", "scope_id" => @c1, "muted" => true},
+        %{"user_id" => "u3", "scope_id" => @s1, "level" => "none"}
+      ])
+
+      assert History.sync_mentions(mention_event(%{mentioned_user_ids: ["u2", "u3"]})) ==
+               {:ok, []}
+    end
+
+    test "storage failures are returned" do
+      expect(RepoMock, :list_history_mention_users, fn _id -> {:error, :timeout} end)
+      assert History.sync_mentions(mention_event()) == {:error, :timeout}
+
+      expect_existing(["u2"])
+      expect(RepoMock, :delete_history_entries, fn _id, _users -> {:error, :timeout} end)
+
+      assert History.sync_mentions(mention_event(%{mentioned_user_ids: []})) ==
+               {:error, :timeout}
+
+      expect_existing([])
+      expect(RepoMock, :list_settings_for, fn _users, _scopes -> {:error, :timeout} end)
+      assert History.sync_mentions(mention_event()) == {:error, :timeout}
+    end
+  end
+
+  describe "forget/1" do
+    test "removes every entry that points at the message" do
+      expect(RepoMock, :delete_history_entries, fn @m1, :all -> :ok end)
+
+      assert History.forget(@m1) == :ok
+    end
+  end
+
   describe "record_mentions/1" do
     test "CA1: stores one entry per mentioned user, with ids only and never the text" do
       expect_settings(["u2", "u3"], [])
