@@ -10,6 +10,7 @@ config :notifications, :start_amqp_consumers, false
 config :notifications, :ensure_indexes, false
 config :notifications, :unread_repo, Notifications.Unread.RepoMock
 config :notifications, :ticket_store, Notifications.Auth.TicketStoreMock
+config :notifications, :delivery_repo, Notifications.Delivery.RepoMock
 
 config :logger, level: :warning
 config :logger, :console, colors: [enabled: false]

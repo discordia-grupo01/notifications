@@ -162,6 +162,41 @@ defmodule Notifications.Events.Lifecycle do
     end
   end
 
+  def handle(%Event.UserProfileUpdated{} = event) do
+    with {:ok, :applied} <-
+           delivery_repo().apply_user_name(event.user_id, event.name, event.version) do
+      Logger.debug("user_name_applied", user_id: event.user_id)
+    else
+      other -> outcome(other, "users.profile_updated")
+    end
+  end
+
+  def handle(%Event.ServerUpdated{} = event) do
+    with {:ok, :applied} <-
+           delivery_repo().apply_server_name(event.server_id, event.name, event.occurred_at) do
+      Logger.debug("server_name_applied", server_id: event.server_id)
+    else
+      other -> outcome(other, "servers.server_updated")
+    end
+  end
+
+  def handle(%Event.UserPresenceChanged{} = event) do
+    expires_at = DateTime.add(DateTime.utc_now(), presence_ttl_seconds(), :second)
+
+    with {:ok, :applied} <-
+           delivery_repo().apply_presence(
+             event.user_id,
+             event.connections,
+             event.do_not_disturb,
+             event.version,
+             expires_at
+           ) do
+      Logger.debug("presence_applied", user_id: event.user_id)
+    else
+      other -> outcome(other, "messaging.user_presence_changed")
+    end
+  end
+
   defp replica_write(server_id, routing_key, resync, write) do
     with :alive <- server_state(server_id),
          {:ok, :applied} <- write.(),
@@ -205,6 +240,8 @@ defmodule Notifications.Events.Lifecycle do
   end
 
   defp repo, do: Repo.impl()
+  defp delivery_repo, do: Notifications.Delivery.Repo.impl()
+  defp presence_ttl_seconds, do: Notifications.Delivery.Config.get(:presence_ttl_seconds)
 
   defp tombstone_expiry, do: DateTime.add(DateTime.utc_now(), @tombstone_ttl_seconds, :second)
 

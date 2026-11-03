@@ -15,6 +15,7 @@ defmodule Notifications.Events.EventTest do
                servers.role_deleted servers.member_roles_updated
                servers.channel_overrides_updated servers.owner_updated
                messaging.message_created messaging.direct_message_created
+               users.profile_updated servers.server_updated messaging.user_presence_changed
              ))
   end
 
@@ -37,6 +38,127 @@ defmodule Notifications.Events.EventTest do
               mentioned_user_ids: ["u2", "u3"],
               occurred_at: %DateTime{}
             }} = Event.parse("messaging.message_created", payload)
+  end
+
+  test "messaging.message_created carries the channel name and the preview when present" do
+    payload =
+      base(%{
+        "server_id" => "s1",
+        "channel_id" => "c1",
+        "message_id" => "m1",
+        "author_id" => "u1",
+        "mentioned_user_ids" => [],
+        "channel_name" => "general",
+        "content_preview" => "hola"
+      })
+
+    assert {:ok, %Event.MessageCreated{channel_name: "general", content_preview: "hola"}} =
+             Event.parse("messaging.message_created", payload)
+  end
+
+  test "messaging.message_created without channel name or preview still parses" do
+    payload =
+      base(%{
+        "server_id" => "s1",
+        "channel_id" => "c1",
+        "message_id" => "m1",
+        "author_id" => "u1",
+        "mentioned_user_ids" => [],
+        "content_preview" => ""
+      })
+
+    assert {:ok, %Event.MessageCreated{channel_name: nil, content_preview: nil}} =
+             Event.parse("messaging.message_created", payload)
+  end
+
+  test "messaging.direct_message_created carries the preview when present" do
+    payload =
+      base(%{
+        "conversation_id" => "conv-1",
+        "message_id" => "m1",
+        "author_id" => "u1",
+        "recipient_id" => "u2",
+        "content_preview" => "hola"
+      })
+
+    assert {:ok, %Event.DirectMessageCreated{content_preview: "hola"}} =
+             Event.parse("messaging.direct_message_created", payload)
+  end
+
+  test "parses users.profile_updated keeping only id, name and version" do
+    payload =
+      base(%{
+        "user_id" => "u1",
+        "version" => 4,
+        "name" => "Beto",
+        "avatar_url" => "x",
+        "description" => "y"
+      })
+
+    assert {:ok, %Event.UserProfileUpdated{user_id: "u1", name: "Beto", version: 4}} =
+             Event.parse("users.profile_updated", payload)
+  end
+
+  test "users.profile_updated rejects a missing name or a bad version" do
+    payload = base(%{"user_id" => "u1", "version" => 4, "name" => "Beto"})
+
+    assert Event.parse("users.profile_updated", Map.delete(payload, "name")) ==
+             {:error, :invalid_payload}
+
+    for version <- [-1, "4", nil] do
+      assert Event.parse("users.profile_updated", Map.put(payload, "version", version)) ==
+               {:error, :invalid_payload}
+    end
+  end
+
+  test "parses servers.server_updated keeping only id and name" do
+    payload = base(%{"server_id" => "s1", "name" => "Mi server", "owner_id" => "u1"})
+
+    assert {:ok, %Event.ServerUpdated{server_id: "s1", name: "Mi server"}} =
+             Event.parse("servers.server_updated", payload)
+
+    assert Event.parse("servers.server_updated", Map.delete(payload, "name")) ==
+             {:error, :invalid_payload}
+  end
+
+  test "parses messaging.user_presence_changed" do
+    payload =
+      base(%{
+        "user_id" => "u1",
+        "connections" => "idle",
+        "do_not_disturb" => true,
+        "version" => 9
+      })
+
+    assert {:ok,
+            %Event.UserPresenceChanged{
+              user_id: "u1",
+              connections: "idle",
+              do_not_disturb: true,
+              version: 9
+            }} = Event.parse("messaging.user_presence_changed", payload)
+  end
+
+  test "messaging.user_presence_changed rejects unknown states and missing fields" do
+    payload =
+      base(%{
+        "user_id" => "u1",
+        "connections" => "active",
+        "do_not_disturb" => false,
+        "version" => 1
+      })
+
+    assert {:ok, _event} = Event.parse("messaging.user_presence_changed", payload)
+
+    for bad <- [
+          Map.put(payload, "connections", "online"),
+          Map.delete(payload, "do_not_disturb"),
+          Map.put(payload, "do_not_disturb", "false"),
+          Map.delete(payload, "version"),
+          Map.delete(payload, "user_id")
+        ] do
+      assert Event.parse("messaging.user_presence_changed", bad) == {:error, :invalid_payload}
+    end
   end
 
   test "parses messaging.direct_message_created" do

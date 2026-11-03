@@ -3,6 +3,7 @@ defmodule Notifications.Events.LifecycleTest do
   import Mox
 
   alias Notifications.Events.{Event, Lifecycle}
+  alias Notifications.Delivery.RepoMock, as: DeliveryRepoMock
   alias Notifications.PushMock
   alias Notifications.Unread.RepoMock
 
@@ -377,6 +378,85 @@ defmodule Notifications.Events.LifecycleTest do
       expect(RepoMock, :put_history, fn _items -> {:error, :timeout} end)
 
       assert Lifecycle.handle(direct_event()) == {:error, :timeout}
+    end
+  end
+
+  describe "users.profile_updated" do
+    defp profile_event(extra \\ %{}),
+      do:
+        struct!(
+          Event.UserProfileUpdated,
+          base(Map.merge(%{user_id: "u1", version: 3, name: "Ana"}, extra))
+        )
+
+    test "keeps the name of the user" do
+      expect(DeliveryRepoMock, :apply_user_name, fn "u1", "Ana", 3 -> {:ok, :applied} end)
+
+      assert Lifecycle.handle(profile_event()) == :ok
+    end
+
+    test "an older version is ignored" do
+      expect(DeliveryRepoMock, :apply_user_name, fn _id, _name, _version -> {:ok, :stale} end)
+
+      assert Lifecycle.handle(profile_event()) == {:ignored, :stale}
+    end
+
+    test "a storage failure is returned so the event is retried" do
+      expect(DeliveryRepoMock, :apply_user_name, fn _id, _name, _version -> {:error, :timeout} end)
+
+      assert Lifecycle.handle(profile_event()) == {:error, :timeout}
+    end
+  end
+
+  describe "servers.server_updated" do
+    defp server_event,
+      do: struct!(Event.ServerUpdated, base(%{server_id: "s1", name: "Mi server"}))
+
+    test "keeps the name of the server" do
+      expect(DeliveryRepoMock, :apply_server_name, fn "s1", "Mi server", @at ->
+        {:ok, :applied}
+      end)
+
+      assert Lifecycle.handle(server_event()) == :ok
+    end
+
+    test "an older snapshot is ignored and a failure is returned" do
+      expect(DeliveryRepoMock, :apply_server_name, fn _id, _name, _at -> {:ok, :stale} end)
+      expect(DeliveryRepoMock, :apply_server_name, fn _id, _name, _at -> {:error, :timeout} end)
+
+      assert Lifecycle.handle(server_event()) == {:ignored, :stale}
+      assert Lifecycle.handle(server_event()) == {:error, :timeout}
+    end
+  end
+
+  describe "messaging.user_presence_changed" do
+    defp presence_event(extra \\ %{}) do
+      struct!(
+        Event.UserPresenceChanged,
+        base(
+          Map.merge(
+            %{user_id: "u1", connections: "active", do_not_disturb: false, version: 5},
+            extra
+          )
+        )
+      )
+    end
+
+    test "keeps the state with an expiry as a safety net" do
+      expect(DeliveryRepoMock, :apply_presence, fn "u1", "active", false, 5, expires_at ->
+        assert DateTime.diff(expires_at, DateTime.utc_now()) in 21_590..21_600
+        {:ok, :applied}
+      end)
+
+      assert Lifecycle.handle(presence_event()) == :ok
+    end
+
+    test "an older version is ignored and a failure is returned" do
+      expect(DeliveryRepoMock, :apply_presence, fn _u, _c, _d, _v, _at -> {:ok, :stale} end)
+      expect(DeliveryRepoMock, :apply_presence, fn _u, _c, _d, _v, _at -> {:error, :timeout} end)
+
+      assert Lifecycle.handle(presence_event()) == {:ignored, :stale}
+      assert Lifecycle.handle(presence_event()) == {:error, :timeout}
     end
   end
 end

@@ -66,7 +66,9 @@ defmodule Notifications.Events.Event do
       :channel_id,
       :message_id,
       :author_id,
-      :mentioned_user_ids
+      :mentioned_user_ids,
+      :channel_name,
+      :content_preview
     ]
   end
 
@@ -85,8 +87,24 @@ defmodule Notifications.Events.Event do
       :conversation_id,
       :message_id,
       :author_id,
-      :recipient_id
+      :recipient_id,
+      :content_preview
     ]
+  end
+
+  defmodule UserProfileUpdated do
+    @enforce_keys [:event_id, :occurred_at, :user_id, :version, :name]
+    defstruct [:event_id, :occurred_at, :user_id, :version, :name]
+  end
+
+  defmodule ServerUpdated do
+    @enforce_keys [:event_id, :occurred_at, :server_id, :name]
+    defstruct [:event_id, :occurred_at, :server_id, :name]
+  end
+
+  defmodule UserPresenceChanged do
+    @enforce_keys [:event_id, :occurred_at, :user_id, :connections, :do_not_disturb, :version]
+    defstruct [:event_id, :occurred_at, :user_id, :connections, :do_not_disturb, :version]
   end
 
   @routing_keys [
@@ -101,8 +119,13 @@ defmodule Notifications.Events.Event do
     {"servers.channel_overrides_updated", ChannelOverridesUpdated},
     {"servers.owner_updated", OwnerUpdated},
     {"messaging.message_created", MessageCreated},
-    {"messaging.direct_message_created", DirectMessageCreated}
+    {"messaging.direct_message_created", DirectMessageCreated},
+    {"users.profile_updated", UserProfileUpdated},
+    {"servers.server_updated", ServerUpdated},
+    {"messaging.user_presence_changed", UserPresenceChanged}
   ]
+
+  @connections ~w(active idle none)
 
   @spec routing_keys() :: [String.t()]
   def routing_keys, do: Enum.map(@routing_keys, &elem(&1, 0))
@@ -166,13 +189,55 @@ defmodule Notifications.Events.Event do
     end
   end
 
-  defp fields(DirectMessageCreated, payload),
-    do: strings(payload, ~w(event_id conversation_id message_id author_id recipient_id)a)
+  defp fields(DirectMessageCreated, payload) do
+    with {:ok, base} <-
+           strings(payload, ~w(event_id conversation_id message_id author_id recipient_id)a) do
+      {:ok, Map.put(base, :content_preview, optional_text(payload, "content_preview"))}
+    end
+  end
 
   defp fields(MessageCreated, payload) do
     with {:ok, base} <- strings(payload, ~w(event_id server_id channel_id message_id author_id)a),
          {:ok, mentioned} <- string_list(payload, "mentioned_user_ids") do
-      {:ok, Map.put(base, :mentioned_user_ids, Enum.uniq(mentioned))}
+      {:ok,
+       base
+       |> Map.put(:mentioned_user_ids, Enum.uniq(mentioned))
+       |> Map.put(:channel_name, optional_text(payload, "channel_name"))
+       |> Map.put(:content_preview, optional_text(payload, "content_preview"))}
+    end
+  end
+
+  defp fields(UserProfileUpdated, payload) do
+    with {:ok, base} <- strings(payload, ~w(event_id user_id name)a),
+         {:ok, version} <- integer(payload, "version") do
+      {:ok, Map.put(base, :version, version)}
+    end
+  end
+
+  defp fields(ServerUpdated, payload), do: strings(payload, ~w(event_id server_id name)a)
+
+  defp fields(UserPresenceChanged, payload) do
+    with {:ok, base} <- strings(payload, ~w(event_id user_id connections)a),
+         true <- base.connections in @connections,
+         %{"do_not_disturb" => dnd} when is_boolean(dnd) <- payload,
+         {:ok, version} <- integer(payload, "version") do
+      {:ok, base |> Map.put(:do_not_disturb, dnd) |> Map.put(:version, version)}
+    else
+      _invalid -> {:error, :invalid_payload}
+    end
+  end
+
+  defp optional_text(payload, key) do
+    case Map.get(payload, key) do
+      text when is_binary(text) and text != "" -> text
+      _other -> nil
+    end
+  end
+
+  defp integer(payload, key) do
+    case Map.get(payload, key) do
+      value when is_integer(value) and value >= 0 -> {:ok, value}
+      _other -> {:error, :invalid_payload}
     end
   end
 
