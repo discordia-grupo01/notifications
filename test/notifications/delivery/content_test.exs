@@ -109,6 +109,84 @@ defmodule Notifications.Delivery.ContentTest do
              Content.build(channel_event())
   end
 
+  test "a mention in the preview is replaced by the name of the mentioned user" do
+    expect(RepoMock, :get_user_names, fn ["u1", "u2"] ->
+      {:ok, %{"u1" => "Beto", "u2" => "Ana"}}
+    end)
+
+    expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{"s1" => "Mi server"}} end)
+
+    assert {:ok, %{body: "Beto: hola @Ana, ¿viste esto?"}} =
+             Content.build(channel_event(%{content_preview: "hola <@u2>, ¿viste esto?"}))
+  end
+
+  test "every mention is resolved with a single lookup, and a repeated user is asked once" do
+    expect(RepoMock, :get_user_names, fn ["u1", "u2", "u3"] ->
+      {:ok, %{"u1" => "Beto", "u2" => "Ana", "u3" => "Caro"}}
+    end)
+
+    expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{}} end)
+
+    preview = "<@u2> <@u3> y de nuevo <@u2>"
+
+    assert {:ok, %{body: "Beto: @Ana @Caro y de nuevo @Ana"}} =
+             Content.build(channel_event(%{content_preview: preview}))
+  end
+
+  test "a mention of the author itself is resolved too" do
+    expect(RepoMock, :get_user_names, fn ["u1"] -> {:ok, %{"u1" => "Beto"}} end)
+    expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{}} end)
+
+    assert {:ok, %{body: "Beto: me nombro @Beto"}} =
+             Content.build(channel_event(%{content_preview: "me nombro <@u1>"}))
+  end
+
+  test "a mentioned user nobody knows stays as a generic mention" do
+    expect(RepoMock, :get_user_names, fn ["u1", "u2"] -> {:ok, %{"u1" => "Beto"}} end)
+    expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{}} end)
+
+    assert {:ok, %{body: "Beto: hola @usuario"}} =
+             Content.build(channel_event(%{content_preview: "hola <@u2>"}))
+  end
+
+  test "a role mention that messaging already turned into @rol is left alone" do
+    expect(RepoMock, :get_user_names, fn ["u1"] -> {:ok, %{"u1" => "Beto"}} end)
+    expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{}} end)
+
+    assert {:ok, %{body: "Beto: @rol atención"}} =
+             Content.build(channel_event(%{content_preview: "@rol atención"}))
+  end
+
+  test "a name that looks like a regex replacement is not interpreted" do
+    expect(RepoMock, :get_user_names, fn ["u1", "u2"] ->
+      {:ok, %{"u1" => "Beto", "u2" => "Ana \\1 $&"}}
+    end)
+
+    expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{}} end)
+
+    assert {:ok, %{body: body}} =
+             Content.build(channel_event(%{content_preview: "hola <@u2>"}))
+
+    assert body == "Beto: hola @Ana \\1 $&"
+  end
+
+  test "an edited message resolves its mentions and keeps the edited mark" do
+    expect(RepoMock, :get_user_names, fn ["u1", "u2"] ->
+      {:ok, %{"u1" => "Beto", "u2" => "Ana"}}
+    end)
+
+    expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{}} end)
+
+    event =
+      struct!(
+        Event.MessageUpdated,
+        Map.from_struct(channel_event(%{content_preview: "hola <@u2>"}))
+      )
+
+    assert {:ok, %{body: "Beto: hola @Ana (editado)", data: %{"edited" => true}}} =
+             Content.build(event)
+  end
+
   test "without a preview the body still says there is a new message" do
     expect(RepoMock, :get_user_names, fn _ids -> {:ok, %{"u1" => "Ana"}} end)
 
