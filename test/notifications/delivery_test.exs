@@ -187,4 +187,58 @@ defmodule Notifications.DeliveryTest do
     log = capture_log(fn -> assert Delivery.notify(direct()) == :ok end)
     assert log =~ "push_skipped"
   end
+
+  describe "notify_edit/2" do
+    defp edit_event do
+      struct!(Event.MessageUpdated, %{
+        event_id: "e3",
+        occurred_at: DateTime.utc_now(),
+        server_id: "s1",
+        channel_id: "c1",
+        message_id: "m2",
+        author_id: "ana",
+        mentioned_user_ids: ["beto"],
+        channel_name: "general",
+        content_preview: "ahora con mención"
+      })
+    end
+
+    test "pushes only the newly mentioned user, marked as edited" do
+      test_pid = self()
+      reachable("beto")
+      stub(RepoMock, :get_user_names, fn _ids -> {:ok, %{"ana" => "Ana"}} end)
+      stub(RepoMock, :get_server_names, fn _ids -> {:ok, %{"s1" => "Mi server"}} end)
+      stub(RepoMock, :claim_delivery, fn "e3", "d1", _at -> :claimed end)
+      stub(RepoMock, :mark_device, fn _id, _outcome -> :ok end)
+
+      stub(SenderMock, :send, fn _device, payload ->
+        send(test_pid, {:push, payload})
+        :ok
+      end)
+
+      assert Delivery.notify_edit(edit_event(), ["beto"]) == :ok
+      await_deliveries()
+
+      assert_received {:push, payload}
+      assert payload.body == "Ana: ahora con mención (editado)"
+      assert payload.data["kind"] == "mention"
+      assert payload.data["edited"] == true
+    end
+
+    test "nobody newly mentioned means nothing is queried" do
+      assert Delivery.notify_edit(edit_event(), []) == :ok
+    end
+
+    test "a failure is logged and never raised" do
+      expect(RepoMock, :list_push_disabled, fn _ids -> {:error, :timeout} end)
+
+      log = capture_log(fn -> assert Delivery.notify_edit(edit_event(), ["beto"]) == :ok end)
+      assert log =~ "push_skipped"
+
+      expect(RepoMock, :list_push_disabled, fn _ids -> raise "boom" end)
+
+      log = capture_log(fn -> assert Delivery.notify_edit(edit_event(), ["beto"]) == :ok end)
+      assert log =~ "push_skipped"
+    end
+  end
 end

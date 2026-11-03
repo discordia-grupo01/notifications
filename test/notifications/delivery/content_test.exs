@@ -65,6 +65,30 @@ defmodule Notifications.Delivery.ContentTest do
               }}
   end
 
+  test "an edit that added a mention says it was edited" do
+    expect(RepoMock, :get_user_names, fn ["u1"] -> {:ok, %{"u1" => "Ana"}} end)
+    expect(RepoMock, :get_server_names, fn ["s1"] -> {:ok, %{"s1" => "Mi server"}} end)
+
+    event =
+      struct!(Event.MessageUpdated, %{
+        event_id: "e2",
+        occurred_at: DateTime.utc_now(),
+        server_id: "s1",
+        channel_id: "c1",
+        message_id: "m1",
+        author_id: "u1",
+        mentioned_user_ids: ["u2"],
+        channel_name: "general",
+        content_preview: "hola @usuario"
+      })
+
+    assert {:ok, content} = Content.build(event)
+    assert content.title == "Mi server - general"
+    assert content.body == "Ana: hola @usuario (editado)"
+    assert content.data["edited"] == true
+    assert content.data["message_id"] == "m1"
+  end
+
   test "a direct message reads Mensaje directo and Name: text" do
     expect(RepoMock, :get_user_names, fn ["u1"] -> {:ok, %{"u1" => "Ana"}} end)
 

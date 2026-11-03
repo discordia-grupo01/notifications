@@ -15,6 +15,7 @@ defmodule Notifications.Events.EventTest do
                servers.role_deleted servers.member_roles_updated
                servers.channel_overrides_updated servers.owner_updated
                messaging.message_created messaging.direct_message_created
+               messaging.message_updated messaging.message_deleted
                users.profile_updated servers.server_updated messaging.user_presence_changed
              ))
   end
@@ -83,6 +84,64 @@ defmodule Notifications.Events.EventTest do
 
     assert {:ok, %Event.DirectMessageCreated{content_preview: "hola"}} =
              Event.parse("messaging.direct_message_created", payload)
+  end
+
+  test "parses messaging.message_updated with the mentions it has after the edit" do
+    payload =
+      base(%{
+        "server_id" => "s1",
+        "channel_id" => "c1",
+        "message_id" => "m1",
+        "author_id" => "u1",
+        "mentioned_user_ids" => ["u2", "u2"],
+        "channel_name" => "general",
+        "content_preview" => "hola @usuario"
+      })
+
+    assert {:ok,
+            %Event.MessageUpdated{
+              server_id: "s1",
+              channel_id: "c1",
+              message_id: "m1",
+              author_id: "u1",
+              mentioned_user_ids: ["u2"],
+              channel_name: "general",
+              content_preview: "hola @usuario"
+            }} = Event.parse("messaging.message_updated", payload)
+  end
+
+  test "messaging.message_updated needs every id and a mention list" do
+    payload =
+      base(%{
+        "server_id" => "s1",
+        "channel_id" => "c1",
+        "message_id" => "m1",
+        "author_id" => "u1",
+        "mentioned_user_ids" => []
+      })
+
+    assert {:ok, %Event.MessageUpdated{channel_name: nil, content_preview: nil}} =
+             Event.parse("messaging.message_updated", payload)
+
+    for key <- ~w(server_id channel_id message_id author_id mentioned_user_ids) do
+      assert Event.parse("messaging.message_updated", Map.delete(payload, key)) ==
+               {:error, :invalid_payload}
+    end
+  end
+
+  test "parses messaging.message_deleted of a channel and of a direct message" do
+    payload = base(%{"channel_id" => "c1", "message_id" => "m1", "author_id" => "u1"})
+
+    assert {:ok, %Event.MessageDeleted{server_id: nil, channel_id: "c1", message_id: "m1"}} =
+             Event.parse("messaging.message_deleted", payload)
+
+    assert {:ok, %Event.MessageDeleted{server_id: "s1"}} =
+             Event.parse("messaging.message_deleted", Map.put(payload, "server_id", "s1"))
+
+    for key <- ~w(channel_id message_id author_id) do
+      assert Event.parse("messaging.message_deleted", Map.delete(payload, key)) ==
+               {:error, :invalid_payload}
+    end
   end
 
   test "parses users.profile_updated keeping only id, name and version" do

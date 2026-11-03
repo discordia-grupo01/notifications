@@ -43,6 +43,7 @@ defmodule Notifications.Unread.Repo.Mongo do
 
     history_indexes = [
       [name: "by_user_recent", key: [user_id: 1, message_id: -1]],
+      [name: "by_message", key: [message_id: 1]],
       [name: "history_expires_at_ttl", key: [expires_at: 1], expireAfterSeconds: 0],
       [name: "by_channel", key: [channel_id: 1]],
       [name: "by_server", key: [server_id: 1]]
@@ -375,6 +376,28 @@ defmodule Notifications.Unread.Repo.Mongo do
   @impl true
   def list_settings_by_scope(scope_ids),
     do: list(@settings, %{"scope_id" => %{"$in" => scope_ids}})
+
+  @impl true
+  def list_history_mention_users(message_id) do
+    with {:ok, docs} <- list(@history, %{"message_id" => message_id, "kind" => "mention"}) do
+      {:ok, Enum.map(docs, & &1["user_id"])}
+    end
+  end
+
+  @impl true
+  def delete_history_entries(_message_id, []), do: :ok
+
+  def delete_history_entries(message_id, user_ids) do
+    filter = %{"message_id" => message_id}
+
+    filter =
+      if user_ids == :all, do: filter, else: Map.put(filter, "user_id", %{"$in" => user_ids})
+
+    case Mongo.delete_many(@conn, @history, filter) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   @impl true
   def put_history(items) do

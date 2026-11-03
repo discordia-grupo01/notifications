@@ -19,6 +19,20 @@ defmodule Notifications.Delivery do
       Logger.warning("push_skipped", event_id: event.event_id, reason: Log.reason(error))
   end
 
+  @spec notify_edit(struct(), [String.t()]) :: :ok
+  def notify_edit(%Event.MessageUpdated{} = event, added) do
+    case deliver(event, Map.new(added, &{&1, :mention})) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("push_skipped", event_id: event.event_id, reason: Log.reason(reason))
+    end
+  rescue
+    error ->
+      Logger.warning("push_skipped", event_id: event.event_id, reason: Log.reason(error))
+  end
+
   defp run(%Event.MessageCreated{} = event) do
     with {:ok, recipients} <- Recipients.for_channel_message(event) do
       deliver(event, recipients)

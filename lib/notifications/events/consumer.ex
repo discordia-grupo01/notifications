@@ -10,6 +10,8 @@ defmodule Notifications.Events.Consumer do
   @unaudited [
     Event.MessageCreated,
     Event.DirectMessageCreated,
+    Event.MessageUpdated,
+    Event.MessageDeleted,
     Event.UserProfileUpdated,
     Event.UserPresenceChanged
   ]

@@ -92,6 +92,34 @@ defmodule Notifications.Events.Event do
     ]
   end
 
+  defmodule MessageUpdated do
+    @enforce_keys [
+      :event_id,
+      :occurred_at,
+      :server_id,
+      :channel_id,
+      :message_id,
+      :author_id,
+      :mentioned_user_ids
+    ]
+    defstruct [
+      :event_id,
+      :occurred_at,
+      :server_id,
+      :channel_id,
+      :message_id,
+      :author_id,
+      :mentioned_user_ids,
+      :channel_name,
+      :content_preview
+    ]
+  end
+
+  defmodule MessageDeleted do
+    @enforce_keys [:event_id, :occurred_at, :channel_id, :message_id, :author_id]
+    defstruct [:event_id, :occurred_at, :server_id, :channel_id, :message_id, :author_id]
+  end
+
   defmodule UserProfileUpdated do
     @enforce_keys [:event_id, :occurred_at, :user_id, :version, :name]
     defstruct [:event_id, :occurred_at, :user_id, :version, :name]
@@ -120,6 +148,8 @@ defmodule Notifications.Events.Event do
     {"servers.owner_updated", OwnerUpdated},
     {"messaging.message_created", MessageCreated},
     {"messaging.direct_message_created", DirectMessageCreated},
+    {"messaging.message_updated", MessageUpdated},
+    {"messaging.message_deleted", MessageDeleted},
     {"users.profile_updated", UserProfileUpdated},
     {"servers.server_updated", ServerUpdated},
     {"messaging.user_presence_changed", UserPresenceChanged}
@@ -204,6 +234,23 @@ defmodule Notifications.Events.Event do
        |> Map.put(:mentioned_user_ids, Enum.uniq(mentioned))
        |> Map.put(:channel_name, optional_text(payload, "channel_name"))
        |> Map.put(:content_preview, optional_text(payload, "content_preview"))}
+    end
+  end
+
+  defp fields(MessageUpdated, payload) do
+    with {:ok, base} <- strings(payload, ~w(event_id server_id channel_id message_id author_id)a),
+         {:ok, mentioned} <- string_list(payload, "mentioned_user_ids") do
+      {:ok,
+       base
+       |> Map.put(:mentioned_user_ids, Enum.uniq(mentioned))
+       |> Map.put(:channel_name, optional_text(payload, "channel_name"))
+       |> Map.put(:content_preview, optional_text(payload, "content_preview"))}
+    end
+  end
+
+  defp fields(MessageDeleted, payload) do
+    with {:ok, base} <- strings(payload, ~w(event_id channel_id message_id author_id)a) do
+      {:ok, Map.put(base, :server_id, optional_text(payload, "server_id"))}
     end
   end
 

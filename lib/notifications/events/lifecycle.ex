@@ -153,6 +153,25 @@ defmodule Notifications.Events.Lifecycle do
     end
   end
 
+  def handle(%Event.MessageUpdated{} = event) do
+    with :alive <- server_state(event.server_id),
+         :alive <- channel_state(event.channel_id),
+         {:ok, added} <- History.sync_mentions(event),
+         :ok <- Delivery.notify_edit(event, added) do
+      Logger.debug("message_edit_applied", message_id: event.message_id, count: length(added))
+    else
+      other -> outcome(other, "messaging.message_updated")
+    end
+  end
+
+  def handle(%Event.MessageDeleted{} = event) do
+    with :ok <- History.forget(event.message_id) do
+      Logger.debug("message_delete_applied", message_id: event.message_id)
+    else
+      other -> outcome(other, "messaging.message_deleted")
+    end
+  end
+
   def handle(%Event.DirectMessageCreated{} = event) do
     with :ok <- History.record_direct(event),
          :ok <- Delivery.notify(event) do

@@ -1,5 +1,6 @@
 defmodule Notifications.Delivery.Content do
   alias Notifications.Delivery.Repo
+  alias Notifications.Events.Event
   alias Notifications.Unread.Repo, as: UnreadRepo
 
   @default_user "Usuario"
@@ -22,6 +23,17 @@ defmodule Notifications.Delivery.Content do
            "message_id" => event.message_id,
            "author_id" => event.author_id
          }
+       }}
+    end
+  end
+
+  def build(%Event.MessageUpdated{} = event) do
+    with {:ok, content} <- build_channel(event) do
+      {:ok,
+       %{
+         content
+         | body: content.body <> " (editado)",
+           data: Map.put(content.data, "edited", true)
        }}
     end
   end
