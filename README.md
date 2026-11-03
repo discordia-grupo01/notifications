@@ -443,7 +443,12 @@ Ver `.env.example`.
 |---|---|
 | `MONGO_URL` | conexión a Mongo |
 | `MONGO_POOL_SIZE` | conexiones que mantiene el servicio |
-| `RABBITMQ_URL` | conexión a RabbitMQ **sin barra final** (una barra es el vhost vacío y el broker rechaza la conexión) |
+| `RABBITMQ_URL` | conexión a RabbitMQ **sin barra final** (una barra es el vhost vacío y el broker rechaza la conexión). Con el puente de Tailscale: `amqp://USUARIO:CLAVE@127.0.0.1:5672` |
+| `TS_AUTHKEY` | opcional: clave de autenticación de Tailscale (reusable y efímera). Si está definida, el contenedor entra a la tailnet y abre el puente hacia RabbitMQ |
+| `RABBITMQ_TS_HOST` | IP o nombre Tailscale del RabbitMQ (obligatoria si hay `TS_AUTHKEY`) |
+| `RABBITMQ_TS_PORT` | puerto de RabbitMQ en la tailnet (5672) |
+| `RABBITMQ_LOCAL_PORT` | puerto local donde escucha el puente (5672) |
+| `TS_HOSTNAME` | nombre del nodo en la tailnet (`discordia-notifications`) |
 | `SECRET_KEY_BASE` | clave del endpoint (obligatoria en producción) |
 | `CHECK_ORIGIN` | orígenes permitidos para el WebSocket (lista separada por comas, o `false`) |
 | `HISTORY_RETENTION_DAYS` | días que se conserva cada entrada del historial; `0` o sin definir = para siempre (por defecto) |
@@ -462,7 +467,7 @@ registra el query string (lleva el ticket) ni contenido de mensajes.
 
 ## Deploy (Render + Atlas)
 
-La imagen es el `Dockerfile` del repo (release de Elixir, usuario sin privilegios, ~17 MB) y
+La imagen es el `Dockerfile` del repo (release de Elixir, usuario sin privilegios, ~120 MB con Tailscale) y
 `render.yaml` es el blueprint de Render. **No usa Supabase**: `notifications` no tiene outbox
 ni Postgres, solo Mongo y RabbitMQ.
 
@@ -472,11 +477,17 @@ ni Postgres, solo Mongo y RabbitMQ.
    `mongodb+srv://USUARIO:CLAVE@cluster0.xxxxx.mongodb.net/notifications?retryWrites=true&w=majority`
    (si la clave tiene caracteres especiales, codificarla como URL). Con `mongodb+srv://` el
    servicio activa TLS verificado solo. Los índices se crean al arrancar.
-2. **RabbitMQ (CloudAMQP).** `RABBITMQ_URL=amqps://USUARIO:CLAVE@host.rmq.cloudamqp.com/VHOST`.
-   Con `amqps://` el servicio verifica el certificado del broker. Usa **una sola conexión**
-   (el plan gratuito permite 20 y ya las comparten `servers`, `identity` y `messaging`).
-3. **Render.** *New > Blueprint*, elegí el repo y completá `MONGO_URL` y `RABBITMQ_URL`
-   (`SECRET_KEY_BASE` se genera solo). Render despliega cuando pasa el CI
+2. **RabbitMQ (por Tailscale).** El RabbitMQ del proyecto corre en una VM y solo es alcanzable
+   por la tailnet. Render no expone `/dev/net/tun`, así que la imagen corre `tailscaled` en modo
+   userspace y un `socat` que reenvía `127.0.0.1:5672` al RabbitMQ con `tailscale nc`
+   (`docker-entrypoint.sh`). En Render se definen `TS_AUTHKEY` (clave de Tailscale *Reusable* y
+   *Ephemeral*), `RABBITMQ_TS_HOST` (IP o nombre Tailscale de la VM de RabbitMQ) y
+   `RABBITMQ_URL=amqp://USUARIO:CLAVE@127.0.0.1:5672` (sin barra final y con un usuario propio,
+   no `guest`). Si `TS_AUTHKEY` no está definida el contenedor arranca directo, como en local y
+   en el CI. Si Tailscale no conecta, la app arranca igual y el consumidor reintenta. Usa **una
+   sola conexión** a RabbitMQ.
+3. **Render.** *New > Blueprint*, elegí el repo y completá `MONGO_URL`, `RABBITMQ_URL`, `TS_AUTHKEY`
+   y `RABBITMQ_TS_HOST` (`SECRET_KEY_BASE` se genera solo). Render despliega cuando pasa el CI
    (`autoDeployTrigger: checksPass`) y usa `/health` como health check. Es una sola instancia.
    El plan es `free`, que se duerme a los 15 minutos sin tráfico entrante; para que no se
    duerma, en cron-job.org se programa un `GET https://<servicio>.onrender.com/health` cada

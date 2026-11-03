@@ -8,11 +8,14 @@ ENV MIX_ENV=prod
 RUN mix compile && mix release
 
 FROM alpine:3.19.1
-RUN apk add --no-cache libstdc++ openssl ncurses-libs ca-certificates \
+RUN apk add --no-cache libstdc++ openssl ncurses-libs ca-certificates tailscale socat \
  && addgroup -S app && adduser -S -G app app
 WORKDIR /app
 COPY --from=builder --chown=app:app /app/_build/prod/rel/notifications ./
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh && chmod +x /usr/local/bin/docker-entrypoint.sh
 USER app
 ENV RELEASE_TMP=/tmp/notifications
 EXPOSE 4000
-CMD ["bin/notifications", "start"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["start"]
