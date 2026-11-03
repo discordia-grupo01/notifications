@@ -373,6 +373,10 @@ defmodule Notifications.Unread.Repo.Mongo do
       })
 
   @impl true
+  def list_settings_by_scope(scope_ids),
+    do: list(@settings, %{"scope_id" => %{"$in" => scope_ids}})
+
+  @impl true
   def put_history(items) do
     operations =
       Enum.map(items, fn %{"_id" => id} = item ->

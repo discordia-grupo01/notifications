@@ -1,6 +1,7 @@
 defmodule Notifications.Events.Lifecycle do
   require Logger
 
+  alias Notifications.Delivery
   alias Notifications.Events.Event
   alias Notifications.History
   alias Notifications.Push
@@ -141,7 +142,8 @@ defmodule Notifications.Events.Lifecycle do
              "message_id" => event.message_id,
              "author_id" => event.author_id,
              "mentioned_user_ids" => event.mentioned_user_ids
-           }) do
+           }),
+         :ok <- Delivery.notify(event) do
       Logger.debug("message_activity_recorded",
         channel_id: event.channel_id,
         message_id: event.message_id
@@ -152,7 +154,8 @@ defmodule Notifications.Events.Lifecycle do
   end
 
   def handle(%Event.DirectMessageCreated{} = event) do
-    with :ok <- History.record_direct(event) do
+    with :ok <- History.record_direct(event),
+         :ok <- Delivery.notify(event) do
       Logger.debug("direct_message_recorded",
         conversation_id: event.conversation_id,
         message_id: event.message_id

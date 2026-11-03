@@ -10,6 +10,14 @@ defmodule Notifications.Events.LifecycleTest do
   setup :verify_on_exit!
 
   setup do
+    stub(RepoMock, :list_settings_by_scope, fn _scopes -> {:ok, []} end)
+    stub(DeliveryRepoMock, :list_push_disabled, fn _ids -> {:ok, []} end)
+    stub(DeliveryRepoMock, :get_presence, fn _ids -> {:ok, %{}} end)
+    stub(DeliveryRepoMock, :list_devices, fn _ids -> {:ok, []} end)
+    :ok
+  end
+
+  setup do
     Application.put_env(:notifications, :push, PushMock)
     on_exit(fn -> Application.delete_env(:notifications, :push) end)
   end
@@ -378,6 +386,47 @@ defmodule Notifications.Events.LifecycleTest do
       expect(RepoMock, :put_history, fn _items -> {:error, :timeout} end)
 
       assert Lifecycle.handle(direct_event()) == {:error, :timeout}
+    end
+  end
+
+  describe "push" do
+    test "a channel message notifies the devices of whoever it mentions" do
+      alive()
+      channel_alive()
+      stub(RepoMock, :record_message, fn _attrs -> :ok end)
+      stub(RepoMock, :list_settings_for, fn _users, _scopes -> {:ok, []} end)
+      stub(RepoMock, :put_history, fn _items -> :ok end)
+      stub(PushMock, :publish, fn _topic, _event, _payload -> :ok end)
+
+      test_pid = self()
+
+      expect(DeliveryRepoMock, :list_devices, fn ["u2"] ->
+        send(test_pid, :devices_asked)
+        {:ok, []}
+      end)
+
+      assert Lifecycle.handle(message_event()) == :ok
+      assert_received :devices_asked
+    end
+
+    test "a direct message notifies the devices of the recipient" do
+      test_pid = self()
+      stub(RepoMock, :put_history, fn _items -> :ok end)
+
+      expect(DeliveryRepoMock, :list_devices, fn ["u2"] ->
+        send(test_pid, :devices_asked)
+        {:ok, []}
+      end)
+
+      assert Lifecycle.handle(direct_event()) == :ok
+      assert_received :devices_asked
+    end
+
+    test "a push problem never fails the event" do
+      stub(RepoMock, :put_history, fn _items -> :ok end)
+      stub(DeliveryRepoMock, :list_push_disabled, fn _ids -> {:error, :timeout} end)
+
+      assert Lifecycle.handle(direct_event()) == :ok
     end
   end
 

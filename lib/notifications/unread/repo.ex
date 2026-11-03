@@ -69,6 +69,8 @@ defmodule Notifications.Unread.Repo do
 
   @callback list_settings_for(user_ids :: [String.t()], scope_ids :: [String.t()]) ::
               {:ok, [map()]} | {:error, term()}
+  @callback list_settings_by_scope(scope_ids :: [String.t()]) ::
+              {:ok, [map()]} | {:error, term()}
   @callback put_history(items :: [map()]) :: result()
   @callback list_history(
               user_id :: String.t(),

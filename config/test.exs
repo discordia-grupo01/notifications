@@ -18,5 +18,10 @@ config :notifications, :push_senders, %{
   "expo" => Notifications.Delivery.SenderMock
 }
 
+config :notifications, :push_delivery,
+  retry_base_ms: 0,
+  retry_max_ms: 0,
+  max_concurrency: 5
+
 config :logger, level: :warning
 config :logger, :console, colors: [enabled: false]

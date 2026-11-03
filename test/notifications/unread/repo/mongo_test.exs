@@ -580,6 +580,21 @@ if mongo_url do
                  Enum.sort([{u, c}, {u, s}])
       end
 
+      test "list_settings_by_scope/1 returns every user's settings for those scopes", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_setting(u, :channel, c, s, %{muted: true})
+        :ok = Repo.put_setting("other-" <> u, :server, s, s, %{level: "all"})
+        :ok = Repo.put_setting(u, :channel, "unrelated", s, %{muted: true})
+
+        assert {:ok, docs} = Repo.list_settings_by_scope([c, s])
+
+        assert docs |> Enum.map(&{&1["user_id"], &1["scope_id"]}) |> Enum.sort() ==
+                 Enum.sort([{u, c}, {"other-" <> u, s}])
+      end
+
       test "deleting a channel removes its mention entries and keeps the rest", %{
         server: s,
         channel: c,
