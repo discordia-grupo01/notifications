@@ -43,11 +43,11 @@ defmodule Notifications.Delivery do
     with {:ok, recipients} <- Recipients.for_direct_message(event) do
       deliver(event, recipients)
     end
+  end
 
-    defp run(%Event.PrivateCall{} = event) do
-      with {:ok, recipients} <- Recipients.for_private_call(event) do
-        deliver(event, recipients)
-      end
+  defp run(%Event.PrivateCall{} = event) do
+    with {:ok, recipients} <- Recipients.for_private_call(event) do
+      deliver(event, recipients)
     end
   end
 

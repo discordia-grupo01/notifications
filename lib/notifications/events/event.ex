@@ -294,12 +294,12 @@ defmodule Notifications.Events.Event do
     else
       _invalid -> {:error, :invalid_payload}
     end
+  end
 
-    defp fields(PrivateCall, payload) do
-      with {:ok, base} <-
-             strings(payload, ~w(event_id call_id conversation_id caller_id recipient_id status)a) do
-        {:ok, base}
-      end
+  defp fields(PrivateCall, payload) do
+    with {:ok, base} <-
+           strings(payload, ~w(event_id call_id conversation_id caller_id recipient_id status)a) do
+      {:ok, base}
     end
   end
 
