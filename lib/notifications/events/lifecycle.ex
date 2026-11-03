@@ -184,6 +184,10 @@ defmodule Notifications.Events.Lifecycle do
     end
   end
 
+  def handle(%Event.PrivateCall{} = event) do
+    Delivery.notify(event)
+  end
+
   def handle(%Event.UserProfileUpdated{} = event) do
     with {:ok, :applied} <-
            delivery_repo().apply_user_name(event.user_id, event.name, event.version) do
