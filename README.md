@@ -339,8 +339,13 @@ GET /v1/notifications/history?limit=50&before=<next_cursor>
   tiene o con `messaging`: **el historial guarda solo ids, nunca el texto** (igual que los eventos).
 - **CA2 (historial vacío):** si no hay nada, `items` es `[]` y `next_cursor` es `null`. Mostrar el
   aviso "no hay notificaciones" es del cliente.
+- **Orden:** por el momento en que ocurrió el evento (`occurred_at`), del más nuevo al más viejo; si
+  dos entradas tienen el mismo instante, desempata por `message_id`. **No se ordena por `message_id`**:
+  `messaging` genera ids ordenables por tiempo (v7) solo cuando el cliente no manda `client_id`; con
+  `client_id` (lo que hace el web-client al enviar) el id es un hash (v5) sin orden temporal.
 - **Paginación:** `limit` de 1 a 100 (50 por defecto) y `before` con el `next_cursor` de la página
-  anterior. `next_cursor` es `null` cuando no quedan más. Un `limit` o `before` inválido es
+  anterior. `next_cursor` es un texto **opaco** (hoy `<milisegundos>_<message_id>`): se reenvía tal
+  cual, sin interpretarlo. Es `null` cuando no quedan más. Un `limit` o `before` inválido es
   `400 INVALID_PAYLOAD`. Una página puede venir con menos entradas que `limit` (si se ocultaron
   menciones, ver abajo) y aun así traer `next_cursor`: hay que seguir pidiendo hasta que sea `null`.
 - **Qué entra:** una mención entra si **avisa** para ese usuario según sus preferencias *en el

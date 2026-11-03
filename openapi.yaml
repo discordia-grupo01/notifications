@@ -478,7 +478,7 @@ paths:
   /v1/notifications/history:
     get:
       callbacks: {}
-      description: Menciones y mensajes directos recientes, ordenados del más nuevo al más viejo, con los ids para ir directo a cada conversación. Solo incluye lo que avisó según las preferencias del momento (un canal silenciado o en `none` no deja entradas) y se conserva `HISTORY_RETENTION_DAYS` días (7 por defecto). Las menciones de canales que el usuario ya no puede ver no se listan. Si no hay nada, `items` viene vacío.
+      description: Menciones y mensajes directos recientes, ordenados por fecha, del más nuevo al más viejo, con los ids para ir directo a cada conversación. Solo incluye lo que avisó según las preferencias del momento (un canal silenciado o en `none` no deja entradas) y se conserva para siempre, salvo que `HISTORY_RETENTION_DAYS` fije un plazo en días. Las menciones de canales que el usuario ya no puede ver no se listan. Si no hay nada, `items` viene vacío.
       operationId: NotificationsWeb.HistoryController.index
       parameters:
         - description: Cantidad de entradas, de 1 a 100. Por defecto 50.
@@ -489,7 +489,7 @@ paths:
             type: integer
             x-struct:
             x-validate:
-        - description: '`next_cursor` de la página anterior: trae las entradas más viejas.'
+        - description: '`next_cursor` de la página anterior (texto opaco, se reenvía tal cual): trae las entradas más viejas.'
           in: query
           name: before
           required: false

@@ -42,7 +42,7 @@ defmodule Notifications.Unread.Repo.Mongo do
     ]
 
     history_indexes = [
-      [name: "by_user_recent", key: [user_id: 1, message_id: -1]],
+      [name: "by_user_timeline", key: [user_id: 1, occurred_at: -1, message_id: -1]],
       [name: "by_message", key: [message_id: 1]],
       [name: "history_expires_at_ttl", key: [expires_at: 1], expireAfterSeconds: 0],
       [name: "by_channel", key: [channel_id: 1]],
@@ -411,15 +411,26 @@ defmodule Notifications.Unread.Repo.Mongo do
 
   @impl true
   def list_history(user_id, before, limit) do
-    filter = %{"user_id" => user_id}
-    filter = if before, do: Map.put(filter, "message_id", %{"$lt" => before}), else: filter
+    sort = [occurred_at: -1, message_id: -1]
 
-    case Mongo.find(@conn, @history, filter, sort: %{"message_id" => -1}, limit: limit) do
+    case Mongo.find(@conn, @history, history_filter(user_id, before), sort: sort, limit: limit) do
       {:error, reason} -> {:error, reason}
       cursor -> {:ok, Enum.to_list(cursor)}
     end
   rescue
     error -> {:error, error}
+  end
+
+  defp history_filter(user_id, nil), do: %{"user_id" => user_id}
+
+  defp history_filter(user_id, {at, message_id}) do
+    %{
+      "user_id" => user_id,
+      "$or" => [
+        %{"occurred_at" => %{"$lt" => at}},
+        %{"occurred_at" => at, "message_id" => %{"$lt" => message_id}}
+      ]
+    }
   end
 
   defp ensure_channel(channel_id, server_id) do

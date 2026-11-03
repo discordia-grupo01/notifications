@@ -547,13 +547,85 @@ if mongo_url do
         assert {:ok, first} = Repo.list_history(u, nil, 2)
         assert ids(first) == [message_id(5), message_id(4)]
 
-        assert {:ok, second} = Repo.list_history(u, message_id(4), 2)
+        assert {:ok, second} = Repo.list_history(u, {@t1, message_id(4)}, 2)
         assert ids(second) == [message_id(3), message_id(2)]
 
-        assert {:ok, last} = Repo.list_history(u, message_id(2), 2)
+        assert {:ok, last} = Repo.list_history(u, {@t1, message_id(2)}, 2)
         assert ids(last) == [message_id(1)]
 
-        assert {:ok, []} = Repo.list_history(u, message_id(1), 2)
+        assert {:ok, []} = Repo.list_history(u, {@t1, message_id(1)}, 2)
+      end
+
+      test "orders by when it happened, not by the message id", %{server: s, channel: c, user: u} do
+        oldest = "ffffffff-ffff-5fff-8fff-ffffffffffff"
+        middle = "00000000-0000-5000-8000-000000000000"
+        newest = "80000000-0000-5000-8000-000000000000"
+
+        :ok =
+          Repo.put_history([
+            mention_item(u, 1, s, c) |> hashed(oldest, @t1),
+            mention_item(u, 2, s, c) |> hashed(middle, @t2),
+            mention_item(u, 3, s, c) |> hashed(newest, DateTime.add(@t2, 1, :second))
+          ])
+
+        assert {:ok, items} = Repo.list_history(u, nil, 50)
+        assert ids(items) == [newest, middle, oldest]
+      end
+
+      test "pages through entries with hashed ids without skipping or repeating", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        hashed = for n <- 1..6, do: "#{n}0000000-0000-5000-8000-00000000000#{7 - n}"
+
+        :ok =
+          Repo.put_history(
+            hashed
+            |> Enum.with_index()
+            |> Enum.map(fn {id, index} ->
+              mention_item(u, index + 1, s, c) |> hashed(id, DateTime.add(@t1, index, :second))
+            end)
+          )
+
+        newest_first = Enum.reverse(hashed)
+        assert {:ok, first} = Repo.list_history(u, nil, 2)
+        assert ids(first) == Enum.take(newest_first, 2)
+
+        position = fn items ->
+          {List.last(items)["occurred_at"], List.last(items)["message_id"]}
+        end
+
+        assert {:ok, second} = Repo.list_history(u, position.(first), 2)
+        assert ids(second) == newest_first |> Enum.drop(2) |> Enum.take(2)
+
+        assert {:ok, third} = Repo.list_history(u, position.(second), 2)
+        assert ids(third) == Enum.drop(newest_first, 4)
+
+        assert {:ok, []} = Repo.list_history(u, position.(third), 2)
+      end
+
+      test "entries with the same instant are split by message id, in both directions", %{
+        server: s,
+        channel: c,
+        user: u
+      } do
+        :ok = Repo.put_history(for n <- 1..3, do: mention_item(u, n, s, c))
+
+        assert {:ok, [only]} = Repo.list_history(u, {@t1, message_id(3)}, 1)
+        assert only["message_id"] == message_id(2)
+
+        assert {:ok, older} =
+                 Repo.list_history(u, {DateTime.add(@t1, 1, :second), message_id(1)}, 50)
+
+        assert ids(older) == [message_id(3), message_id(2), message_id(1)]
+      end
+
+      defp hashed(item, id, at) do
+        item
+        |> Map.put("_id", item["user_id"] <> ":" <> id)
+        |> Map.put("message_id", id)
+        |> Map.put("occurred_at", at)
       end
 
       test "an empty history is an empty list", %{user: u} do
@@ -687,7 +759,7 @@ if mongo_url do
           |> Enum.map(& &1["name"])
 
         assert "history_expires_at_ttl" in names
-        assert "by_user_recent" in names
+        assert "by_user_timeline" in names
       end
     end
 

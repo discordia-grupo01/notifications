@@ -14,6 +14,7 @@ defmodule Notifications.HistoryTest do
   @m2 "00000000-0000-7000-8000-000000000002"
   @m3 "00000000-0000-7000-8000-000000000003"
   @at ~U[2026-10-31 12:00:00.000000Z]
+  @at_ms ~U[2026-10-31 12:00:00.000Z]
 
   defp mention_event(extra \\ %{}) do
     Map.merge(
@@ -426,10 +427,11 @@ defmodule Notifications.HistoryTest do
       assert Enum.map(items, & &1["message_id"]) == [@m2, @m1]
     end
 
-    test "passes the cursor and the limit to the repository" do
-      expect(RepoMock, :list_history, fn @me, @m3, 2 -> {:ok, []} end)
+    test "passes the position and the limit to the repository" do
+      expect(RepoMock, :list_history, fn @me, {@at, @m3}, 2 -> {:ok, []} end)
 
-      assert History.list(@me, before: @m3, limit: 2) == {:ok, %{items: [], next_cursor: nil}}
+      assert History.list(@me, before: {@at, @m3}, limit: 2) ==
+               {:ok, %{items: [], next_cursor: nil}}
     end
 
     test "a full page offers the next cursor, even if some entries were hidden" do
@@ -439,7 +441,18 @@ defmodule Notifications.HistoryTest do
         {:ok, [mention_doc(@m3, "hidden"), dm_doc(@m2)]}
       end)
 
-      assert {:ok, %{items: [_one], next_cursor: @m2}} = History.list(@me, limit: 2)
+      assert {:ok, %{items: [_one], next_cursor: cursor}} = History.list(@me, limit: 2)
+      assert cursor == "#{DateTime.to_unix(@at, :millisecond)}_#{@m2}"
+    end
+
+    test "the cursor works for ids that are not time ordered" do
+      stub_visible([@c1])
+      hashed = "e0e2b4f0-3518-5818-8e3b-09c951ebb2bd"
+
+      expect(RepoMock, :list_history, fn @me, nil, 1 -> {:ok, [dm_doc(hashed)]} end)
+
+      assert {:ok, %{next_cursor: cursor}} = History.list(@me, limit: 1)
+      assert History.decode_cursor(cursor) == {:ok, {@at_ms, hashed}}
     end
 
     test "a page shorter than the limit has no next cursor" do
@@ -459,6 +472,46 @@ defmodule Notifications.HistoryTest do
       stub(RepoMock, :list_memberships, fn @me -> {:error, :timeout} end)
 
       assert History.list(@me) == {:error, :timeout}
+    end
+  end
+
+  describe "decode_cursor/1" do
+    @hashed "e0e2b4f0-3518-5818-8e3b-09c951ebb2bd"
+
+    test "reads the date and the id back" do
+      millis = DateTime.to_unix(@at, :millisecond)
+
+      assert History.decode_cursor("#{millis}_#{@m1}") ==
+               {:ok, {~U[2026-10-31 12:00:00.000Z], @m1}}
+    end
+
+    test "accepts ids of any version" do
+      assert {:ok, {_at, @hashed}} = History.decode_cursor("1761912000000_#{@hashed}")
+    end
+
+    test "accepts the start of the epoch" do
+      assert {:ok, {~U[1970-01-01 00:00:00.000Z], @m1}} = History.decode_cursor("0_#{@m1}")
+    end
+
+    for bad <- [
+          "",
+          "nope",
+          "1761912000000",
+          "1761912000000_",
+          "1761912000000_nope",
+          "abc_00000000-0000-7000-8000-000000000001",
+          "-5_00000000-0000-7000-8000-000000000001",
+          "12.5_00000000-0000-7000-8000-000000000001",
+          "00000000-0000-7000-8000-000000000001",
+          "99999999999999999999_00000000-0000-7000-8000-000000000001"
+        ] do
+      test "rejects #{inspect(bad)}" do
+        assert History.decode_cursor(unquote(bad)) == :error
+      end
+    end
+
+    test "rejects anything that is not a string" do
+      for bad <- [nil, 123, %{}, ["1_x"]], do: assert(History.decode_cursor(bad) == :error)
     end
   end
 end
