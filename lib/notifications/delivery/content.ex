@@ -9,7 +9,6 @@ defmodule Notifications.Delivery.Content do
   @default_server "Servidor"
   @default_channel "canal"
   @default_text "Nuevo mensaje"
-  @direct_title "Mensaje directo"
 
   @type t :: %{title: String.t(), body: String.t(), data: map()}
 
@@ -35,8 +34,8 @@ defmodule Notifications.Delivery.Content do
     with {:ok, author, preview} <- author_and_preview(event) do
       {:ok,
        %{
-         title: @direct_title,
-         body: body(author, preview),
+         title: author,
+         body: preview || @default_text,
          data: %{
            "conversation_id" => conversation_id,
            "message_id" => event.message_id,
@@ -71,8 +70,8 @@ defmodule Notifications.Delivery.Content do
          {:ok, channel} <- channel_name(event) do
       {:ok,
        %{
-         title: "#{server} - #{channel}",
-         body: body(author, preview),
+         title: "#{author} en ##{channel}",
+         body: "#{server} · #{preview || @default_text}",
          data: %{
            "server_id" => server_id,
            "channel_id" => channel_id,
@@ -106,9 +105,6 @@ defmodule Notifications.Delivery.Content do
       end
     end)
   end
-
-  defp body(author, nil), do: "#{author}: #{@default_text}"
-  defp body(author, preview), do: "#{author}: #{preview}"
 
   defp user_name(user_id) do
     with {:ok, names} <- Repo.impl().get_user_names([user_id]) do

@@ -47,15 +47,15 @@ defmodule Notifications.Delivery.ContentTest do
     )
   end
 
-  test "a channel message reads Server - Channel and Name: text" do
+  test "a channel message reads Name en #channel and Server · text" do
     expect(RepoMock, :get_user_names, fn ["u1"] -> {:ok, %{"u1" => "Ana"}} end)
     expect(RepoMock, :get_server_names, fn ["s1"] -> {:ok, %{"s1" => "Mi server"}} end)
 
     assert Content.build(channel_event()) ==
              {:ok,
               %{
-                title: "Mi server - general",
-                body: "Ana: hola a todos",
+                title: "Ana en #general",
+                body: "Mi server · hola a todos",
                 data: %{
                   "server_id" => "s1",
                   "channel_id" => "c1",
@@ -83,20 +83,20 @@ defmodule Notifications.Delivery.ContentTest do
       })
 
     assert {:ok, content} = Content.build(event)
-    assert content.title == "Mi server - general"
-    assert content.body == "Ana: hola @usuario (editado)"
+    assert content.title == "Ana en #general"
+    assert content.body == "Mi server · hola @usuario (editado)"
     assert content.data["edited"] == true
     assert content.data["message_id"] == "m1"
   end
 
-  test "a direct message reads Mensaje directo and Name: text" do
+  test "a direct message has the author as title and the text as body" do
     expect(RepoMock, :get_user_names, fn ["u1"] -> {:ok, %{"u1" => "Ana"}} end)
 
     assert Content.build(direct_event()) ==
              {:ok,
               %{
-                title: "Mensaje directo",
-                body: "Ana: hola",
+                title: "Ana",
+                body: "hola",
                 data: %{"conversation_id" => "conv-1", "message_id" => "m1", "author_id" => "u1"}
               }}
   end
@@ -105,7 +105,7 @@ defmodule Notifications.Delivery.ContentTest do
     expect(RepoMock, :get_user_names, fn _ids -> {:ok, %{}} end)
     expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{}} end)
 
-    assert {:ok, %{title: "Servidor - general", body: "Usuario: hola a todos"}} =
+    assert {:ok, %{title: "Usuario en #general", body: "Servidor · hola a todos"}} =
              Content.build(channel_event())
   end
 
@@ -116,7 +116,7 @@ defmodule Notifications.Delivery.ContentTest do
 
     expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{"s1" => "Mi server"}} end)
 
-    assert {:ok, %{body: "Beto: hola @Ana, ¿viste esto?"}} =
+    assert {:ok, %{body: "Mi server · hola @Ana, ¿viste esto?"}} =
              Content.build(channel_event(%{content_preview: "hola <@u2>, ¿viste esto?"}))
   end
 
@@ -129,7 +129,7 @@ defmodule Notifications.Delivery.ContentTest do
 
     preview = "<@u2> <@u3> y de nuevo <@u2>"
 
-    assert {:ok, %{body: "Beto: @Ana @Caro y de nuevo @Ana"}} =
+    assert {:ok, %{body: "Servidor · @Ana @Caro y de nuevo @Ana"}} =
              Content.build(channel_event(%{content_preview: preview}))
   end
 
@@ -137,7 +137,7 @@ defmodule Notifications.Delivery.ContentTest do
     expect(RepoMock, :get_user_names, fn ["u1"] -> {:ok, %{"u1" => "Beto"}} end)
     expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{}} end)
 
-    assert {:ok, %{body: "Beto: me nombro @Beto"}} =
+    assert {:ok, %{body: "Servidor · me nombro @Beto"}} =
              Content.build(channel_event(%{content_preview: "me nombro <@u1>"}))
   end
 
@@ -145,7 +145,7 @@ defmodule Notifications.Delivery.ContentTest do
     expect(RepoMock, :get_user_names, fn ["u1", "u2"] -> {:ok, %{"u1" => "Beto"}} end)
     expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{}} end)
 
-    assert {:ok, %{body: "Beto: hola @usuario"}} =
+    assert {:ok, %{body: "Servidor · hola @usuario"}} =
              Content.build(channel_event(%{content_preview: "hola <@u2>"}))
   end
 
@@ -153,7 +153,7 @@ defmodule Notifications.Delivery.ContentTest do
     expect(RepoMock, :get_user_names, fn ["u1"] -> {:ok, %{"u1" => "Beto"}} end)
     expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{}} end)
 
-    assert {:ok, %{body: "Beto: @rol atención"}} =
+    assert {:ok, %{body: "Servidor · @rol atención"}} =
              Content.build(channel_event(%{content_preview: "@rol atención"}))
   end
 
@@ -167,7 +167,7 @@ defmodule Notifications.Delivery.ContentTest do
     assert {:ok, %{body: body}} =
              Content.build(channel_event(%{content_preview: "hola <@u2>"}))
 
-    assert body == "Beto: hola @Ana \\1 $&"
+    assert body == "Servidor · hola @Ana \\1 $&"
   end
 
   test "an edited message resolves its mentions and keeps the edited mark" do
@@ -183,15 +183,27 @@ defmodule Notifications.Delivery.ContentTest do
         Map.from_struct(channel_event(%{content_preview: "hola <@u2>"}))
       )
 
-    assert {:ok, %{body: "Beto: hola @Ana (editado)", data: %{"edited" => true}}} =
+    assert {:ok, %{body: "Servidor · hola @Ana (editado)", data: %{"edited" => true}}} =
              Content.build(event)
   end
 
   test "without a preview the body still says there is a new message" do
     expect(RepoMock, :get_user_names, fn _ids -> {:ok, %{"u1" => "Ana"}} end)
 
-    assert {:ok, %{body: "Ana: Nuevo mensaje"}} =
+    assert {:ok, %{title: "Ana", body: "Nuevo mensaje"}} =
              Content.build(direct_event(%{content_preview: nil}))
+
+    expect(RepoMock, :get_user_names, fn _ids -> {:ok, %{"u1" => "Ana"}} end)
+    expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{"s1" => "Mi server"}} end)
+
+    assert {:ok, %{body: "Mi server · Nuevo mensaje"}} =
+             Content.build(channel_event(%{content_preview: nil}))
+  end
+
+  test "a direct message from an unknown author is titled with the generic name" do
+    expect(RepoMock, :get_user_names, fn _ids -> {:ok, %{}} end)
+
+    assert {:ok, %{title: "Usuario", body: "hola"}} = Content.build(direct_event())
   end
 
   test "a channel name missing from the event comes from the local replica" do
@@ -199,7 +211,7 @@ defmodule Notifications.Delivery.ContentTest do
     expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{"s1" => "Mi server"}} end)
     expect(UnreadRepoMock, :get_channel, fn "c1" -> %{"name" => "anuncios"} end)
 
-    assert {:ok, %{title: "Mi server - anuncios"}} =
+    assert {:ok, %{title: "Ana en #anuncios"}} =
              Content.build(channel_event(%{channel_name: nil}))
   end
 
@@ -208,7 +220,7 @@ defmodule Notifications.Delivery.ContentTest do
     expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{"s1" => "Mi server"}} end)
     expect(UnreadRepoMock, :get_channel, fn "c1" -> nil end)
 
-    assert {:ok, %{title: "Mi server - canal"}} =
+    assert {:ok, %{title: "Ana en #canal"}} =
              Content.build(channel_event(%{channel_name: nil}))
   end
 
