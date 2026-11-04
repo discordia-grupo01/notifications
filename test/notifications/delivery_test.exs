@@ -220,7 +220,8 @@ defmodule Notifications.DeliveryTest do
       await_deliveries()
 
       assert_received {:push, payload}
-      assert payload.body == "Ana: ahora con mención (editado)"
+      assert payload.title == "Ana en #general"
+      assert payload.body == "Mi server · ahora con mención (editado)"
       assert payload.data["kind"] == "mention"
       assert payload.data["edited"] == true
     end
