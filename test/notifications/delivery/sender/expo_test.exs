@@ -34,6 +34,36 @@ defmodule Notifications.Delivery.Sender.ExpoTest do
     assert Expo.send(@device, @payload) == :ok
   end
 
+  test "an incoming call carries the category with the answer and decline buttons" do
+    ringing = %{
+      title: "Llamada de voz",
+      body: "Ana te está llamando",
+      data: %{"call_id" => "call-1", "status" => "ringing", "kind" => "voice_call"}
+    }
+
+    expect(HttpMock, :post, fn _url, _headers, body, _timeout ->
+      assert Jason.decode!(body)["categoryId"] == "private_call_incoming"
+      reply(200, %{"data" => %{"status" => "ok"}})
+    end)
+
+    assert Expo.send(@device, ringing) == :ok
+  end
+
+  test "a call that is no longer ringing has no buttons" do
+    missed = %{
+      title: "Llamada de voz",
+      body: "La llamada de voz no fue respondida",
+      data: %{"call_id" => "call-1", "status" => "missed", "kind" => "voice_call"}
+    }
+
+    expect(HttpMock, :post, fn _url, _headers, body, _timeout ->
+      refute Map.has_key?(Jason.decode!(body), "categoryId")
+      reply(200, %{"data" => %{"status" => "ok"}})
+    end)
+
+    assert Expo.send(@device, missed) == :ok
+  end
+
   test "sends the access token when one is configured" do
     Application.put_env(:notifications, :push_delivery, expo_access_token: "secret")
     on_exit(fn -> Application.delete_env(:notifications, :push_delivery) end)
