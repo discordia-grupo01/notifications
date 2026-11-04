@@ -266,12 +266,14 @@ El autor nunca recibe el suyo, y silenciar siempre gana. Además se descartan:
   molestar". Inactiva (5 minutos sin interacción) o sin conexión recibe el push. Si no hay dato, o
   venció (6 horas), se asume app cerrada: se prefiere un aviso de más a perder uno.
 
-**Qué dice el push.** Canal: título `Servidor - Canal`, cuerpo `Nombre: mensaje`. Directo: título
-`Mensaje directo`, cuerpo `Nombre: mensaje`. El texto llega cortado (unos 140 caracteres) en el
+**Qué dice el push.** Canal: título `Nombre en #canal`, cuerpo `Servidor · mensaje`. Directo:
+título `Nombre`, cuerpo `mensaje`. El texto llega cortado (unos 140 caracteres) en el
 propio evento y **no se guarda**; los nombres salen de réplicas alimentadas por
 `users.profile_updated` y `servers.server_updated` (si faltan, "Usuario" y "Servidor"). El payload
 incluye ids para abrir el lugar correcto: `kind` (`mention`, `message` o `direct_message`),
-`message_id`, `author_id` y `server_id` + `channel_id` o `conversation_id`.
+`message_id`, `author_id` y `server_id` + `channel_id` o `conversation_id`. En Expo, una llamada
+que está sonando va con `categoryId: private_call_incoming`, que la app registra con los botones
+Aceptar y Rechazar.
 
 **Dispositivos** (el token viaja solo en el cuerpo, nunca en la URL ni en los logs):
 
