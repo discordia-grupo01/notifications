@@ -23,7 +23,7 @@ defmodule Notifications.Unread.Position do
   @doc "Sorts before every message at or after `at`, so they all count as unread."
   @spec floor(DateTime.t()) :: t()
   def floor(%DateTime{} = at) do
-    millis = at |> DateTime.to_unix(:millisecond) |> max(0)
+    millis = at |> DateTime.to_unix(:millisecond) |> Kernel.max(0)
     (millis |> Integer.to_string() |> String.pad_leading(@width, "0")) <> "_"
   end
 
