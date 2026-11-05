@@ -44,23 +44,34 @@ preferencias) y la lectura de su historial.
   en Mongo los miembros, roles, overrides y dueño de cada servidor a partir de los eventos
   `servers.*`, y calcula con `Notifications.Unread.Access` qué canales de texto puede ver
   cada usuario (`VIEW_CHANNELS`). Nunca pregunta a `servers`.
-- **Actividad por canal**: cada `messaging.message_created` guarda el id del último mensaje
-  del canal. El evento lleva solo ids (canal, mensaje, autor, mencionados), nunca el
-  contenido.
-- **Marcadores por usuario**: `read_markers` (hasta qué mensaje leyó) y `mention_markers`
-  (último mensaje que lo mencionó).
-- **No hay contadores**. El estado se *deriva* comparando ids: los ids de mensaje son UUIDv7
-  (ordenables por tiempo), así que "hay no leídos" es `último_mensaje > hasta_donde_leí`.
-  Por eso reprocesar un evento no cambia nada (idempotente) y no hay que mantener sumas que
-  se desincronicen.
+- **Posición de un mensaje**: dónde está en la línea de tiempo del canal, como un texto que se
+  ordena por tiempo: `"<milisegundos de occurred_at, con ceros>_<message_id>"`
+  (`Notifications.Unread.Position`). **No se comparan ids de mensaje**: `messaging` genera
+  ids ordenables por tiempo (UUIDv7) solo cuando el cliente no manda `client_id`; con
+  `client_id` (lo que hacen las dos apps) el id es un hash (UUIDv5) sin orden. El
+  `occurred_at` del evento es el `inserted_at` del mensaje; el id solo desempata dentro del
+  mismo milisegundo.
+- **Actividad por canal**: cada `messaging.message_created` guarda la posición del último
+  mensaje del canal y la de los últimos 50 (para resolver `mark_read` con un `message_id`).
+  El evento lleva solo ids (canal, mensaje, autor, mencionados), nunca el contenido.
+- **Marcadores por usuario**: `read_markers` (hasta qué posición leyó) y `unread_mentions`
+  (una entrada por cada mención todavía sin leer, con su posición). Leer un canal borra las
+  menciones hasta la posición leída.
+- **El estado se deriva comparando posiciones**: "hay no leídos" es
+  `último_mensaje > hasta_donde_leí`, y la cantidad de menciones es cuántas menciones
+  guardadas quedan después de `hasta_donde_leí`. Reprocesar un evento no cambia nada
+  (idempotente).
 - **Línea base**: lo que cuenta como leído es el máximo entre lo que el usuario marcó como
-  leído y el momento en que se unió al servidor (`UUID.floor_v7(joined_at)`). Los mensajes
+  leído y el momento en que se unió al servidor (`Position.floor(joined_at)`). Los mensajes
   anteriores a que entrara nunca aparecen como no leídos.
 - **Tus propios mensajes** nunca te dejan un canal no leído, y además marcan como leído lo
   anterior (escribir en un canal implica haberlo visto).
-- **Menciones**: si el último mensaje que te mencionó es posterior a tu línea base, el canal
-  se marca `mention: true`, además de `unread: true`. El servidor hereda `mention` si alguno
-  de sus canales lo tiene.
+- **Menciones**: si alguna mención es posterior a tu línea base, el canal se marca
+  `mention: true` (además de `unread: true`) y `mention_count` dice cuántas son. El servidor
+  hereda `mention` si alguno de sus canales lo tiene y suma sus `mention_count`.
+- **Datos anteriores a las posiciones**: los documentos viejos (`last_message_id`,
+  `last_read_id` y la colección `mention_markers`) se ignoran. Cada canal arranca como leído
+  y vuelve a contar desde su próximo mensaje. `mention_markers` ya no se usa y se puede borrar.
 
 ## Por qué hay un endpoint HTTP
 
@@ -100,11 +111,12 @@ Al unirse el servidor empuja `snapshot` con el estado completo; después va empu
     {
       "server_id": "…",
       "unread": true,
-      "mention": false,
-      "notify": false,
+      "mention": true,
+      "mention_count": 2,
+      "notify": true,
       "muted": false,
       "channels": [
-        { "channel_id": "…", "unread": true, "mention": false, "notify": false, "muted": false }
+        { "channel_id": "…", "unread": true, "mention": true, "mention_count": 2, "notify": true, "muted": false }
       ]
     }
   ],
@@ -119,7 +131,8 @@ no tenga nada sin leer: sirven para dibujar el estado de cada canal y servidor s
 
 `notify` es el aviso destacado: lo que decide si hay que mostrar o enviar una notificación. `unread`
 es solo "hay algo sin leer" y no depende de ninguna configuración. `mention` indica que hay una
-mención pendiente que sigue contando como destacada.
+mención pendiente que sigue contando como destacada, y `mention_count` cuántas son (es `0`
+cuando `mention` es `false`, por ejemplo en un canal silenciado).
 
 `unread_updated` -- cambió el estado de un canal (y de su servidor):
 
@@ -129,14 +142,15 @@ mención pendiente que sigue contando como destacada.
   "channel_id": "…",
   "unread": true,
   "mention": true,
+  "mention_count": 1,
   "notify": true,
   "muted": false,
-  "server": { "unread": true, "mention": true, "notify": true, "muted": false }
+  "server": { "unread": true, "mention": true, "mention_count": 3, "notify": true, "muted": false }
 }
 ```
 
 Solo se empuja cuando cambian los indicadores: un segundo mensaje en un canal que ya estaba
-no leído no genera otro aviso.
+no leído no genera otro aviso (una mención nueva sí, porque cambia `mention_count`).
 
 Eventos que manda el cliente:
 
@@ -146,11 +160,19 @@ Eventos que manda el cliente:
 | `mark_all_read` | `{}` | `{"channels": N}` con cuántos canales se limpiaron, o error `UNREAD_UNAVAILABLE`; después llega un `snapshot` (vacío) a todas las sesiones del usuario |
 | `snapshot` | `{}` | `ok` y un nuevo `snapshot` |
 
-`mark_read` nunca retrocede un marcador. Acepta el `message_id` que mande el cliente aunque el
-evento de ese mensaje todavía no haya llegado por RabbitMQ (el cliente lo ve en vivo por
-`messaging` antes que `notifications` lo procese; si se recortara al último mensaje conocido, el
-canal se encendería como no leído justo después de leerlo). Tiene que ser un UUIDv7 y no estar
-más de 60 s en el futuro; si no, responde `INVALID_PAYLOAD`.
+`mark_read` nunca retrocede un marcador. El `message_id` puede ser cualquier UUID (v7 o el hash
+v5 de los envíos con `client_id`; si no tiene formato de UUID responde `INVALID_PAYLOAD`), y se
+resuelve así:
+
+| `message_id` | Lee hasta |
+|---|---|
+| no viene | el último mensaje conocido del canal |
+| uno de los últimos 50 mensajes conocidos | exactamente ese mensaje |
+| uno que todavía no llegó por RabbitMQ | **ahora** (o el último conocido, si es posterior) |
+
+El último caso existe porque el cliente ve el mensaje en vivo por `messaging` antes de que
+`notifications` procese el evento: si se recortara al último mensaje conocido, el canal se
+encendería como no leído justo después de leerlo.
 Se avisa a las otras sesiones del mismo usuario para que apaguen el indicador también.
 
 ### Marcar como leído
@@ -418,9 +440,9 @@ Mongo ante un `resync`.
 | Colección | Contenido |
 |---|---|
 | `channels` | canales conocidos (`kind`, `server_id`) |
-| `channel_activity` | `_id` = canal, `last_message_id` (se actualiza con `$max`) |
-| `read_markers` | `_id` = `user:canal`, `last_read_id` (`$max`) |
-| `mention_markers` | `_id` = `user:canal`, `last_mention_id` (`$max`) |
+| `channel_activity` | `_id` = canal, `last_position` (`$max`), `recent` (los últimos 50 `{message_id, position}`) |
+| `read_markers` | `_id` = `user:canal`, `last_read_position` (`$max`) |
+| `unread_mentions` | `_id` = `user:mensaje`, `channel_id`, `server_id`, `message_id`, `position`; se borran al leer |
 | `replica_servers`, `replica_roles`, `replica_members`, `replica_overrides` | réplica de permisos |
 | `event_clocks` | relojes LWW y lápidas |
 | `consumed_events` | auditoría de lo consumido |

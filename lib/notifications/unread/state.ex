@@ -1,29 +1,43 @@
 defmodule Notifications.Unread.State do
   alias Notifications.Settings
+  alias Notifications.Unread.Position
 
   @type channel :: %{
           server_id: String.t(),
-          baseline: String.t(),
-          last_message_id: String.t() | nil,
-          last_mention_id: String.t() | nil,
+          baseline: Position.t(),
+          last_position: Position.t() | nil,
+          mentions: [Position.t()],
           channel_muted: boolean(),
           server_muted: boolean(),
           channel_level: String.t() | nil,
           server_level: String.t() | nil
         }
   @type t :: %{String.t() => channel()}
-  @type flags :: %{unread: boolean(), mention: boolean(), notify: boolean(), muted: boolean()}
+  @type flags :: %{
+          unread: boolean(),
+          mention: boolean(),
+          mention_count: non_neg_integer(),
+          notify: boolean(),
+          muted: boolean()
+        }
   @type settings :: Notifications.Settings.scopes()
 
-  @spec build([map()], %{String.t() => String.t()}, map(), map()) :: t()
+  @spec build(
+          [map()],
+          %{String.t() => Position.t()},
+          %{String.t() => Position.t()},
+          %{String.t() => [Position.t()]}
+        ) :: t()
   def build(visible, activity, reads, mentions) do
     Map.new(visible, fn %{channel_id: id, server_id: server_id, floor: floor} ->
+      baseline = Position.max(floor, Map.get(reads, id))
+
       {id,
        %{
          server_id: server_id,
-         baseline: Enum.max([floor, Map.get(reads, id, "")]),
-         last_message_id: Map.get(activity, id),
-         last_mention_id: Map.get(mentions, id),
+         baseline: baseline,
+         last_position: Map.get(activity, id),
+         mentions: mentions |> Map.get(id, []) |> unread_after(baseline),
          channel_muted: false,
          server_muted: false,
          channel_level: nil,
@@ -54,11 +68,11 @@ defmodule Notifications.Unread.State do
     end
   end
 
-  @spec mark_read(t(), String.t(), String.t()) :: t()
+  @spec mark_read(t(), String.t(), Position.t()) :: t()
   def mark_read(state, channel_id, up_to) do
     case Map.fetch(state, channel_id) do
       {:ok, channel} ->
-        Map.put(state, channel_id, %{channel | baseline: max_id(channel.baseline, up_to)})
+        Map.put(state, channel_id, read_up_to(channel, up_to))
 
       :error ->
         state
@@ -69,7 +83,7 @@ defmodule Notifications.Unread.State do
   def channel_flags(state, channel_id) do
     case Map.fetch(state, channel_id) do
       {:ok, channel} -> flags(channel)
-      :error -> %{unread: false, mention: false, notify: false, muted: false}
+      :error -> %{unread: false, mention: false, mention_count: 0, notify: false, muted: false}
     end
   end
 
@@ -79,13 +93,17 @@ defmodule Notifications.Unread.State do
 
     channels
     |> Enum.map(&flags/1)
-    |> Enum.reduce(%{unread: false, mention: false, notify: false}, fn flags, acc ->
-      %{
-        unread: acc.unread or flags.unread,
-        mention: acc.mention or flags.mention,
-        notify: acc.notify or flags.notify
-      }
-    end)
+    |> Enum.reduce(
+      %{unread: false, mention: false, mention_count: 0, notify: false},
+      fn flags, acc ->
+        %{
+          unread: acc.unread or flags.unread,
+          mention: acc.mention or flags.mention,
+          mention_count: acc.mention_count + flags.mention_count,
+          notify: acc.notify or flags.notify
+        }
+      end
+    )
     |> Map.put(:muted, Enum.any?(channels, & &1.server_muted))
   end
 
@@ -117,11 +135,13 @@ defmodule Notifications.Unread.State do
       "channel_id" => channel_id,
       "unread" => channel_flags.unread,
       "mention" => channel_flags.mention,
+      "mention_count" => channel_flags.mention_count,
       "notify" => channel_flags.notify,
       "muted" => channel_flags.muted,
       "server" => %{
         "unread" => server_flags.unread,
         "mention" => server_flags.mention,
+        "mention_count" => server_flags.mention_count,
         "notify" => server_flags.notify,
         "muted" => server_flags.muted
       }
@@ -131,34 +151,45 @@ defmodule Notifications.Unread.State do
   @spec server_ids(t()) :: [String.t()]
   def server_ids(state), do: state |> Map.values() |> Enum.map(& &1.server_id) |> Enum.uniq()
 
-  defp apply_message(channel, user_id, %{message_id: message_id} = event) do
+  defp apply_message(channel, user_id, %{position: position} = event) do
     channel
-    |> Map.update!(:last_message_id, &max_id(&1, message_id))
+    |> Map.update!(:last_position, &Position.max(&1, position))
     |> track_mention(user_id, event)
     |> track_author(user_id, event)
   end
 
-  defp track_mention(channel, user_id, %{message_id: message_id, mentioned_user_ids: mentioned}) do
-    if user_id in mentioned,
-      do: Map.update!(channel, :last_mention_id, &max_id(&1, message_id)),
-      else: channel
+  defp track_mention(channel, user_id, %{position: position, mentioned_user_ids: mentioned}) do
+    if user_id in mentioned and Position.after?(position, channel.baseline) and
+         position not in channel.mentions,
+       do: %{channel | mentions: [position | channel.mentions]},
+       else: channel
   end
 
-  defp track_author(channel, user_id, %{author_id: user_id, message_id: message_id}),
-    do: %{channel | baseline: max_id(channel.baseline, message_id)}
+  defp track_author(channel, user_id, %{author_id: user_id, position: position}),
+    do: read_up_to(channel, position)
 
   defp track_author(channel, _user_id, _event), do: channel
 
-  defp flags(%{baseline: baseline, last_message_id: last, last_mention_id: mention} = channel) do
+  defp read_up_to(channel, up_to) do
+    baseline = Position.max(channel.baseline, up_to)
+    %{channel | baseline: baseline, mentions: unread_after(channel.mentions, baseline)}
+  end
+
+  defp unread_after(positions, baseline),
+    do: Enum.filter(positions, &Position.after?(&1, baseline))
+
+  defp flags(%{baseline: baseline, last_position: last, mentions: mentions} = channel) do
     muted? = channel.channel_muted or channel.server_muted
     level = Settings.effective_level(channel)
-    mentioned? = is_binary(mention) and mention > baseline
-    unread? = mentioned? or (is_binary(last) and last > baseline)
+    mention_count = Enum.count(mentions, &Position.after?(&1, baseline))
+    mentioned? = mention_count > 0
+    unread? = mentioned? or Position.after?(last, baseline)
     mention? = mentioned? and level != "none"
 
     %{
       unread: unread?,
       mention: mention?,
+      mention_count: if(mention?, do: mention_count, else: 0),
       notify: mention? or (level == "all" and unread?),
       muted: muted?
     }
@@ -198,6 +229,7 @@ defmodule Notifications.Unread.State do
       "server_id" => server_id,
       "unread" => server.unread,
       "mention" => server.mention,
+      "mention_count" => server.mention_count,
       "notify" => server.notify,
       "muted" => server.muted,
       "channels" =>
@@ -207,6 +239,7 @@ defmodule Notifications.Unread.State do
             "channel_id" => id,
             "unread" => flags.unread,
             "mention" => flags.mention,
+            "mention_count" => flags.mention_count,
             "notify" => flags.notify,
             "muted" => flags.muted
           }
@@ -214,7 +247,4 @@ defmodule Notifications.Unread.State do
         |> Enum.sort_by(& &1["channel_id"])
     }
   end
-
-  defp max_id(nil, id), do: id
-  defp max_id(current, id), do: max(current, id)
 end

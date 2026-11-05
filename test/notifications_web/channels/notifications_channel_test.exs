@@ -4,7 +4,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
 
   alias Notifications.Auth.TicketStoreMock
   alias Notifications.AuthFixtures
-  alias Notifications.Unread.RepoMock
+  alias Notifications.Unread.{Position, RepoMock}
   alias NotificationsWeb.{Endpoint, NotificationsChannel, UserSocket}
 
   setup :set_mox_global
@@ -15,9 +15,15 @@ defmodule NotificationsWeb.NotificationsChannelTest do
   @s1 "server-1"
   @c1 "channel-1"
   @c2 "channel-2"
-  @m1 "00000000-0000-7000-8000-000000000001"
-  @m2 "00000000-0000-7000-8000-000000000002"
-  @m3 "00000000-0000-7000-8000-000000000003"
+  @id1 "9f0c1a52-5b1e-5c3a-9d2e-000000000001"
+  @id2 "1a2b3c4d-5b1e-5c3a-9d2e-000000000002"
+  @id3 "05e6f7a8-5b1e-5c3a-9d2e-000000000003"
+
+  @p1 Position.of(~U[2026-10-01 00:00:01.000Z], @id1)
+  @p2 Position.of(~U[2026-10-01 00:00:02.000Z], @id2)
+  @p3 Position.of(~U[2026-10-01 00:00:03.000Z], @id3)
+
+  @positions %{@id1 => @p1, @id2 => @p2, @id3 => @p3}
 
   setup do
     {:ok, world} =
@@ -60,7 +66,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
     stub(RepoMock, :list_settings, fn @me -> {:ok, Agent.get(world, & &1.mutes)} end)
     stub(RepoMock, :get_activity, fn _ids -> {:ok, Agent.get(world, & &1.activity)} end)
     stub(RepoMock, :get_read_markers, fn @me, _ids -> {:ok, Agent.get(world, & &1.reads)} end)
-    stub(RepoMock, :get_mention_markers, fn @me, _ids -> {:ok, %{}} end)
+    stub(RepoMock, :get_unread_mentions, fn @me, _ids -> {:ok, %{}} end)
 
     stub(RepoMock, :get_channel, fn id ->
       if id in Agent.get(world, & &1.channels),
@@ -92,7 +98,8 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       "channel_id" => channel_id,
       "message_id" => message_id,
       "author_id" => Keyword.get(opts, :author, @other),
-      "mentioned_user_ids" => Keyword.get(opts, :mentions, [])
+      "mentioned_user_ids" => Keyword.get(opts, :mentions, []),
+      "position" => Map.fetch!(@positions, message_id)
     })
   end
 
@@ -112,8 +119,8 @@ defmodule NotificationsWeb.NotificationsChannelTest do
     end
 
     test "CA1/CA2: pushes the unread snapshot right after joining", %{world: world} do
-      put_world(world, :activity, %{@c1 => @m2})
-      put_world(world, :reads, %{@c1 => @m1})
+      put_world(world, :activity, %{@c1 => @p2})
+      put_world(world, :reads, %{@c1 => @p1})
       join_own()
 
       assert_push "snapshot", %{
@@ -140,7 +147,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", _
 
-      message_created(@c1, @m1)
+      message_created(@c1, @id1)
 
       assert_push "unread_updated", %{
         "server_id" => @s1,
@@ -155,7 +162,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", _
 
-      message_created(@c1, @m1, mentions: [@me])
+      message_created(@c1, @id1, mentions: [@me])
 
       assert_push "unread_updated", %{
         "channel_id" => @c1,
@@ -169,7 +176,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", _
 
-      message_created(@c1, @m1, mentions: [@other])
+      message_created(@c1, @id1, mentions: [@other])
 
       assert_push "unread_updated", %{"mention" => false, "unread" => true}
     end
@@ -178,7 +185,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", _
 
-      message_created(@c1, @m1, author: @me)
+      message_created(@c1, @id1, author: @me)
 
       refute_push "unread_updated", _
     end
@@ -187,9 +194,9 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", _
 
-      message_created(@c1, @m1)
+      message_created(@c1, @id1)
       assert_push "unread_updated", _
-      message_created(@c1, @m2)
+      message_created(@c1, @id2)
 
       refute_push "unread_updated", _
     end
@@ -198,9 +205,9 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", _
 
-      message_created(@c1, @m1)
+      message_created(@c1, @id1)
       assert_push "unread_updated", %{"mention" => false}
-      message_created(@c1, @m2, mentions: [@me])
+      message_created(@c1, @id2, mentions: [@me])
 
       assert_push "unread_updated", %{"mention" => true}
     end
@@ -209,7 +216,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", _
 
-      message_created("hidden-channel", @m1)
+      message_created("hidden-channel", @id1)
 
       refute_push "unread_updated", _
     end
@@ -218,16 +225,16 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", _
 
-      message_created(@c1, @m1)
+      message_created(@c1, @id1)
       assert_push "unread_updated", _
-      message_created(@c2, @m2)
+      message_created(@c2, @id2)
       assert_push "unread_updated", %{"channel_id" => @c2}
     end
   end
 
   describe "muted" do
     test "CA1: the snapshot keeps a muted channel unread and lists what is muted", %{world: world} do
-      put_world(world, :activity, %{@c1 => @m1})
+      put_world(world, :activity, %{@c1 => @p1})
 
       put_world(world, :mutes, [
         %{"scope" => "channel", "scope_id" => @c1, "server_id" => @s1, "muted" => true}
@@ -256,7 +263,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", _
 
-      message_created(@c1, @m1, mentions: [@me])
+      message_created(@c1, @id1, mentions: [@me])
 
       assert_push "unread_updated", %{
         "channel_id" => @c1,
@@ -275,10 +282,10 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", %{"muted" => %{"servers" => [@s1], "channels" => []}}
 
-      message_created(@c1, @m1, mentions: [@me])
+      message_created(@c1, @id1, mentions: [@me])
       assert_push "unread_updated", %{"channel_id" => @c1, "mention" => false, "muted" => true}
 
-      message_created(@c2, @m2, mentions: [@me])
+      message_created(@c2, @id2, mentions: [@me])
 
       assert_push "unread_updated", %{
         "channel_id" => @c2,
@@ -327,7 +334,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
 
       assert_push "snapshot", %{"muted" => %{"channels" => []}}
 
-      message_created(@c1, @m1, mentions: [@me])
+      message_created(@c1, @id1, mentions: [@me])
 
       assert_push "unread_updated", %{"channel_id" => @c1, "mention" => true, "muted" => false}
     end
@@ -354,10 +361,10 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", _
 
-      message_created(@c1, @m1)
+      message_created(@c1, @id1)
       assert_push "unread_updated", %{"unread" => true, "mention" => false, "notify" => false}
 
-      message_created(@c1, @m2, mentions: [@me])
+      message_created(@c1, @id2, mentions: [@me])
       assert_push "unread_updated", %{"mention" => true, "notify" => true}
     end
 
@@ -368,7 +375,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", _
 
-      message_created(@c1, @m1)
+      message_created(@c1, @id1)
 
       assert_push "unread_updated", %{
         "channel_id" => @c1,
@@ -387,7 +394,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", _
 
-      message_created(@c1, @m1, mentions: [@me])
+      message_created(@c1, @id1, mentions: [@me])
 
       assert_push "unread_updated", %{
         "unread" => true,
@@ -407,10 +414,10 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", _
 
-      message_created(@c1, @m1)
+      message_created(@c1, @id1)
       assert_push "unread_updated", %{"channel_id" => @c1, "notify" => true}
 
-      message_created(@c2, @m2, mentions: [@me])
+      message_created(@c2, @id2, mentions: [@me])
       assert_push "unread_updated", %{"channel_id" => @c2, "notify" => false, "mention" => false}
     end
 
@@ -423,10 +430,10 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", _
 
-      message_created(@c1, @m1, mentions: [@me])
+      message_created(@c1, @id1, mentions: [@me])
       assert_push "unread_updated", %{"channel_id" => @c1, "notify" => false}
 
-      message_created(@c2, @m2)
+      message_created(@c2, @id2)
       assert_push "unread_updated", %{"channel_id" => @c2, "notify" => true}
     end
 
@@ -439,7 +446,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", _
 
-      message_created(@c1, @m1, mentions: [@me])
+      message_created(@c1, @id1, mentions: [@me])
 
       assert_push "unread_updated", %{"unread" => true, "notify" => false, "muted" => true}
     end
@@ -468,8 +475,8 @@ defmodule NotificationsWeb.NotificationsChannelTest do
 
   describe "mark_read" do
     test "CA1/CA2: reading a channel clears it and its server and tells the user's other sessions" do
-      expect(RepoMock, :mark_read, fn @me, @c1, @s1, @m1 -> :ok end)
-      stub(RepoMock, :get_activity, fn _ids -> {:ok, %{@c1 => @m1}} end)
+      expect(RepoMock, :mark_read, fn @me, @c1, @s1, @p1 -> :ok end)
+      stub(RepoMock, :get_activity, fn _ids -> {:ok, %{@c1 => @p1}} end)
       Endpoint.subscribe("user:" <> @me)
       socket = join_own()
       assert_push "snapshot", %{"servers" => [%{"unread" => true}]}
@@ -487,28 +494,29 @@ defmodule NotificationsWeb.NotificationsChannelTest do
 
       assert_receive %Phoenix.Socket.Broadcast{
         event: "read",
-        payload: %{"channel_id" => @c1, "message_id" => @m1}
+        payload: %{"channel_id" => @c1, "position" => @p1}
       }
     end
 
     test "reading up to a given message keeps newer messages unread" do
-      expect(RepoMock, :mark_read, fn @me, @c1, @s1, @m2 -> :ok end)
-      stub(RepoMock, :get_activity, fn _ids -> {:ok, %{@c1 => @m3}} end)
+      expect(RepoMock, :find_position, fn @c1, @id2 -> {:ok, @p2} end)
+      expect(RepoMock, :mark_read, fn @me, @c1, @s1, @p2 -> :ok end)
+      stub(RepoMock, :get_activity, fn _ids -> {:ok, %{@c1 => @p3}} end)
       socket = join_own()
       assert_push "snapshot", _
 
-      ref = push(socket, "mark_read", %{"channel_id" => @c1, "message_id" => @m2})
+      ref = push(socket, "mark_read", %{"channel_id" => @c1, "message_id" => @id2})
 
       assert_reply ref, :ok
       refute_push "unread_updated", _
     end
 
     test "another session of the same user reading the channel clears it here" do
-      stub(RepoMock, :get_activity, fn _ids -> {:ok, %{@c1 => @m1}} end)
+      stub(RepoMock, :get_activity, fn _ids -> {:ok, %{@c1 => @p1}} end)
       join_own()
       assert_push "snapshot", %{"servers" => [%{"unread" => true}]}
 
-      Endpoint.broadcast("user:" <> @me, "read", %{"channel_id" => @c1, "message_id" => @m1})
+      Endpoint.broadcast("user:" <> @me, "read", %{"channel_id" => @c1, "position" => @p1})
 
       assert_push "unread_updated", %{"channel_id" => @c1, "unread" => false}
     end
@@ -548,7 +556,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
     end
 
     test "a storage failure is reported as unavailable" do
-      stub(RepoMock, :get_activity, fn _ids -> {:ok, %{@c1 => @m1}} end)
+      stub(RepoMock, :get_activity, fn _ids -> {:ok, %{@c1 => @p1}} end)
       stub(RepoMock, :mark_read, fn _u, _c, _s, _m -> {:error, :timeout} end)
       socket = join_own()
       assert_push "snapshot", _
@@ -572,7 +580,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
     setup %{world: world} do
       stub(RepoMock, :mark_all_read, fn @me, entries ->
         Agent.update(world, fn state ->
-          reads = Map.new(entries, &{&1.channel_id, &1.message_id})
+          reads = Map.new(entries, &{&1.channel_id, &1.position})
           %{state | reads: Map.merge(state.reads, reads)}
         end)
 
@@ -585,7 +593,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
     test "CA2: clears every unread indicator and replies with how many channels were cleared", %{
       world: world
     } do
-      put_world(world, :activity, %{@c1 => @m2, @c2 => @m3})
+      put_world(world, :activity, %{@c1 => @p2, @c2 => @p3})
       socket = join_own()
       assert_push "snapshot", %{"servers" => [%{"channels" => [_a, _b]}]}
 
@@ -596,8 +604,8 @@ defmodule NotificationsWeb.NotificationsChannelTest do
     end
 
     test "CA2: mentions disappear too", %{world: world} do
-      put_world(world, :activity, %{@c1 => @m2})
-      stub(RepoMock, :get_mention_markers, fn @me, _ids -> {:ok, %{@c1 => @m2}} end)
+      put_world(world, :activity, %{@c1 => @p2})
+      stub(RepoMock, :get_unread_mentions, fn @me, _ids -> {:ok, %{@c1 => [@p2]}} end)
       socket = join_own()
       assert_push "snapshot", %{"servers" => [%{"mention" => true}]}
 
@@ -608,7 +616,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
     end
 
     test "the user's other sessions are cleared as well", %{world: world} do
-      put_world(world, :activity, %{@c1 => @m2})
+      put_world(world, :activity, %{@c1 => @p2})
       first = join_own()
       assert_push "snapshot", %{"servers" => [_one]}
       other = join_own()
@@ -632,7 +640,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
     end
 
     test "messages that arrive afterwards are unread again", %{world: world} do
-      put_world(world, :activity, %{@c1 => @m1})
+      put_world(world, :activity, %{@c1 => @p1})
       socket = join_own()
       assert_push "snapshot", _
 
@@ -640,13 +648,13 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       assert_reply ref, :ok
       assert_push "snapshot", %{"servers" => []}
 
-      message_created(@c1, @m2)
+      message_created(@c1, @id2)
 
       assert_push "unread_updated", %{"channel_id" => @c1, "unread" => true}
     end
 
     test "a storage failure is reported as unavailable", %{world: world} do
-      put_world(world, :activity, %{@c1 => @m2})
+      put_world(world, :activity, %{@c1 => @p2})
       stub(RepoMock, :mark_all_read, fn _user, _entries -> {:error, :timeout} end)
       socket = join_own()
       assert_push "snapshot", _
@@ -662,14 +670,14 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       join_own()
       assert_push "snapshot", %{"servers" => []}
 
-      put_world(world, :activity, %{@c1 => @m1})
+      put_world(world, :activity, %{@c1 => @p1})
       Endpoint.broadcast("user:" <> @me, "resync", %{})
 
       assert_push "snapshot", %{"servers" => [%{"server_id" => @s1}]}
     end
 
     test "losing access to a channel drops it from the state", %{world: world} do
-      put_world(world, :activity, %{@c1 => @m1})
+      put_world(world, :activity, %{@c1 => @p1})
       join_own()
       assert_push "snapshot", %{"servers" => [%{"channels" => [_one]}]}
 
@@ -698,7 +706,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
 
       assert_reply ref, :error, %{error: %{code: "UNREAD_UNAVAILABLE"}}
       Endpoint.broadcast("user:" <> @me, "resync", %{})
-      message_created(@c1, @m1)
+      message_created(@c1, @id1)
       assert_push "unread_updated", %{"channel_id" => @c1}
     end
   end
