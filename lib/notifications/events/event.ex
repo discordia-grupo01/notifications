@@ -307,14 +307,14 @@ defmodule Notifications.Events.Event do
            strings(payload, ~w(event_id call_id conversation_id caller_id recipient_id status)a) do
       {:ok, base}
     end
+  end
 
-    defp fields(PlatformStatusChanged, payload) do
-      with {:ok, base} <- strings(payload, ~w(event_id status)a),
-           true <- base.status in ~w(operational degraded maintenance) do
-        {:ok, base}
-      else
-        _invalid -> {:error, :invalid_payload}
-      end
+  defp fields(PlatformStatusChanged, payload) do
+    with {:ok, base} <- strings(payload, ~w(event_id status)a),
+         true <- base.status in ~w(operational degraded maintenance) do
+      {:ok, base}
+    else
+      _invalid -> {:error, :invalid_payload}
     end
   end
 
