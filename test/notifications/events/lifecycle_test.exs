@@ -349,6 +349,38 @@ defmodule Notifications.Events.LifecycleTest do
     end
   end
 
+  describe "platform.status_changed" do
+    test "publishes a refetch notification to the platform topic" do
+      event = struct!(Event.PlatformStatusChanged, base(%{status: "degraded"}))
+
+      expect(PushMock, :publish, fn "platform",
+                                    "status_changed",
+                                    %{
+                                      "refetch" => true,
+                                      "status" => "degraded"
+                                    } ->
+        :ok
+      end)
+
+      assert Lifecycle.handle(event) == :ok
+    end
+
+    test "returns the push failure so the event can be retried" do
+      event = struct!(Event.PlatformStatusChanged, base(%{status: "operational"}))
+
+      expect(PushMock, :publish, fn "platform",
+                                    "status_changed",
+                                    %{
+                                      "refetch" => true,
+                                      "status" => "operational"
+                                    } ->
+        {:error, :pubsub_unavailable}
+      end)
+
+      assert Lifecycle.handle(event) == {:error, :pubsub_unavailable}
+    end
+  end
+
   describe "messaging.direct_message_created" do
     defp direct_event(extra \\ %{}) do
       struct!(

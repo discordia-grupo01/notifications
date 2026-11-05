@@ -136,6 +136,25 @@ defmodule NotificationsWeb.NotificationsChannelTest do
   end
 
   describe "live updates" do
+    test "forwards platform status changes so clients can refetch the current status" do
+      join_own()
+      assert_push "snapshot", _
+
+      Endpoint.broadcast("platform", "status_changed", %{
+        "refetch" => true,
+        "status" => "degraded"
+      })
+
+      assert_push "status_changed", %{"refetch" => true, "status" => "degraded"}
+
+      Endpoint.broadcast("platform", "status_changed", %{
+        "refetch" => true,
+        "status" => "operational"
+      })
+
+      assert_push "status_changed", %{"refetch" => true, "status" => "operational"}
+    end
+
     test "CA1/CA2: a new message in a channel marks the channel and its server unread" do
       join_own()
       assert_push "snapshot", _

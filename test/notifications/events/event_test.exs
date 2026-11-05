@@ -17,7 +17,7 @@ defmodule Notifications.Events.EventTest do
                messaging.message_created messaging.direct_message_created
                messaging.message_updated messaging.message_deleted
                users.profile_updated servers.server_updated messaging.user_presence_changed
-               voice.private_call
+               voice.private_call platform.status_changed
              ))
   end
 
@@ -105,6 +105,13 @@ defmodule Notifications.Events.EventTest do
               recipient_id: "recipient-1",
               status: "ringing"
             }} = Event.parse("voice.private_call", payload)
+  end
+
+  test "parses platform.status_changed" do
+    payload = base(%{"status" => "degraded"})
+
+    assert {:ok, %Event.PlatformStatusChanged{status: "degraded"}} =
+             Event.parse("platform.status_changed", payload)
   end
 
   test "parses messaging.message_updated with the mentions it has after the edit" do
