@@ -6,7 +6,7 @@ defmodule Notifications.Unread.Repo.Mongo do
   @clocks "event_clocks"
   @activity "channel_activity"
   @read_markers "read_markers"
-  @mention_markers "mention_markers"
+  @unread_mentions "unread_mentions"
   @settings "notification_settings"
   @history "notification_history"
   @replica_servers "replica_servers"
@@ -14,6 +14,7 @@ defmodule Notifications.Unread.Repo.Mongo do
   @replica_members "replica_members"
   @replica_overrides "replica_overrides"
   @tombstone_ttl_seconds 7 * 24 * 60 * 60
+  @recent_positions 50
   @epoch ~U[1970-01-01 00:00:00Z]
 
   @impl true
@@ -52,7 +53,7 @@ defmodule Notifications.Unread.Repo.Mongo do
     with :ok <- Mongo.create_indexes(@conn, @channels, by_server),
          :ok <- Mongo.create_indexes(@conn, @activity, by_server),
          :ok <- Mongo.create_indexes(@conn, @read_markers, by_user ++ by_user_server),
-         :ok <- Mongo.create_indexes(@conn, @mention_markers, by_user ++ by_user_server),
+         :ok <- Mongo.create_indexes(@conn, @unread_mentions, by_user ++ by_user_server),
          :ok <- Mongo.create_indexes(@conn, @replica_roles, replica_ttl ++ by_server),
          :ok <-
            Mongo.create_indexes(
@@ -105,7 +106,7 @@ defmodule Notifications.Unread.Repo.Mongo do
     with {:ok, _result} <- Mongo.delete_one(@conn, @activity, %{"_id" => channel_id}),
          {:ok, _result} <- Mongo.delete_many(@conn, @read_markers, %{"channel_id" => channel_id}),
          {:ok, _result} <-
-           Mongo.delete_many(@conn, @mention_markers, %{"channel_id" => channel_id}),
+           Mongo.delete_many(@conn, @unread_mentions, %{"channel_id" => channel_id}),
          {:ok, _result} <- Mongo.delete_many(@conn, @settings, %{"scope_id" => channel_id}),
          {:ok, _result} <- Mongo.delete_many(@conn, @history, %{"channel_id" => channel_id}),
          {:ok, _result} <- Mongo.delete_one(@conn, @replica_overrides, %{"_id" => channel_id}),
@@ -123,9 +124,9 @@ defmodule Notifications.Unread.Repo.Mongo do
     with {:ok, _result} <-
            Mongo.delete_many(@conn, @activity, %{"_id" => %{"$in" => all_ids}}),
          {:ok, _result} <- Mongo.delete_many(@conn, @read_markers, by_channels),
-         {:ok, _result} <- Mongo.delete_many(@conn, @mention_markers, by_channels),
+         {:ok, _result} <- Mongo.delete_many(@conn, @unread_mentions, by_channels),
          {:ok, _result} <- Mongo.delete_many(@conn, @read_markers, by_server),
-         {:ok, _result} <- Mongo.delete_many(@conn, @mention_markers, by_server),
+         {:ok, _result} <- Mongo.delete_many(@conn, @unread_mentions, by_server),
          {:ok, _result} <- Mongo.delete_many(@conn, @settings, by_server),
          {:ok, _result} <- Mongo.delete_many(@conn, @history, by_server),
          {:ok, _result} <- Mongo.delete_many(@conn, @replica_overrides, by_server),
@@ -199,7 +200,7 @@ defmodule Notifications.Unread.Repo.Mongo do
              "server_id" => server_id
            }),
          {:ok, _result} <-
-           Mongo.delete_many(@conn, @mention_markers, %{
+           Mongo.delete_many(@conn, @unread_mentions, %{
              "user_id" => user_id,
              "server_id" => server_id
            }),
@@ -274,62 +275,122 @@ defmodule Notifications.Unread.Repo.Mongo do
         server_id: server_id,
         message_id: message_id,
         author_id: author_id,
-        mentioned_user_ids: mentioned_user_ids
+        mentioned_user_ids: mentioned_user_ids,
+        position: position
       }) do
     with :ok <- ensure_channel(channel_id, server_id),
-         :ok <-
-           upsert(
-             @activity,
-             channel_id,
-             %{
-               "$max" => %{"last_message_id" => message_id},
-               "$set" => %{"server_id" => server_id}
-             }
-           ),
-         :ok <- mark_read(author_id, channel_id, server_id, message_id) do
-      record_mentions(mentioned_user_ids, channel_id, server_id, message_id)
+         :ok <- record_activity(channel_id, server_id, message_id, position),
+         :ok <- mark_read(author_id, channel_id, server_id, position) do
+      record_mentions(mentioned_user_ids, channel_id, server_id, message_id, position)
     end
   end
 
   @impl true
   def get_activity(channel_ids) do
     with {:ok, docs} <- list(@activity, %{"_id" => %{"$in" => channel_ids}}) do
-      {:ok, Map.new(docs, fn doc -> {doc["_id"], doc["last_message_id"]} end)}
+      {:ok,
+       for doc <- docs, is_binary(doc["last_position"]), into: %{} do
+         {doc["_id"], doc["last_position"]}
+       end}
     end
   end
 
   @impl true
-  def get_read_markers(user_id, channel_ids),
-    do: markers(@read_markers, "last_read_id", user_id, channel_ids)
+  def find_position(channel_id, message_id) do
+    filter = %{"_id" => channel_id, "recent.message_id" => message_id}
 
-  @impl true
-  def get_mention_markers(user_id, channel_ids),
-    do: markers(@mention_markers, "last_mention_id", user_id, channel_ids)
-
-  @impl true
-  def mark_all_read(user_id, entries) do
-    operations =
-      Enum.map(entries, fn %{channel_id: channel_id, server_id: server_id, message_id: id} ->
-        {marker_key(user_id, channel_id),
-         %{
-           "$max" => %{"last_read_id" => id},
-           "$set" => %{"user_id" => user_id, "channel_id" => channel_id, "server_id" => server_id}
-         }}
-      end)
-
-    upsert_many(@read_markers, operations)
+    case Mongo.find_one(@conn, @activity, filter, projection: %{"recent.$" => 1}) do
+      %{"recent" => [%{"position" => position} | _rest]} -> {:ok, position}
+      {:error, reason} -> {:error, reason}
+      _none -> {:ok, nil}
+    end
   end
 
   @impl true
-  def mark_read(user_id, channel_id, server_id, message_id) do
-    upsert(
-      @read_markers,
-      marker_key(user_id, channel_id),
-      %{
-        "$max" => %{"last_read_id" => message_id},
-        "$set" => %{"user_id" => user_id, "channel_id" => channel_id, "server_id" => server_id}
+  def get_read_markers(_user_id, []), do: {:ok, %{}}
+
+  def get_read_markers(user_id, channel_ids) do
+    with {:ok, docs} <- list(@read_markers, by_user_channels(user_id, channel_ids)) do
+      {:ok,
+       for doc <- docs, is_binary(doc["last_read_position"]), into: %{} do
+         {doc["channel_id"], doc["last_read_position"]}
+       end}
+    end
+  end
+
+  @impl true
+  def get_unread_mentions(_user_id, []), do: {:ok, %{}}
+
+  def get_unread_mentions(user_id, channel_ids) do
+    with {:ok, docs} <- list(@unread_mentions, by_user_channels(user_id, channel_ids)) do
+      {:ok, docs |> Enum.group_by(& &1["channel_id"], & &1["position"])}
+    end
+  end
+
+  @impl true
+  def mark_all_read(_user_id, []), do: :ok
+
+  def mark_all_read(user_id, entries) do
+    operations =
+      Enum.map(entries, fn %{channel_id: channel_id, server_id: server_id, position: position} ->
+        {marker_key(user_id, channel_id), read_update(user_id, channel_id, server_id, position)}
+      end)
+
+    read_mentions =
+      Enum.map(entries, fn %{channel_id: channel_id, position: position} ->
+        %{"channel_id" => channel_id, "position" => %{"$lte" => position}}
+      end)
+
+    with :ok <- upsert_many(@read_markers, operations) do
+      delete_many(@unread_mentions, %{"user_id" => user_id, "$or" => read_mentions})
+    end
+  end
+
+  @impl true
+  def mark_read(user_id, channel_id, server_id, position) do
+    with :ok <-
+           upsert(
+             @read_markers,
+             marker_key(user_id, channel_id),
+             read_update(user_id, channel_id, server_id, position)
+           ) do
+      delete_many(@unread_mentions, %{
+        "user_id" => user_id,
+        "channel_id" => channel_id,
+        "position" => %{"$lte" => position}
+      })
+    end
+  end
+
+  defp read_update(user_id, channel_id, server_id, position) do
+    %{
+      "$max" => %{"last_read_position" => position},
+      "$set" => %{"user_id" => user_id, "channel_id" => channel_id, "server_id" => server_id}
+    }
+  end
+
+  # `recent` keeps the position of the last messages so that `mark_read` can read
+  # up to exactly the message the client shows. A replayed event matches no
+  # document, the upsert tries to insert a second one and Mongo reports a duplicate.
+  defp record_activity(channel_id, server_id, message_id, position) do
+    filter = %{"_id" => channel_id, "recent.message_id" => %{"$ne" => message_id}}
+
+    update = %{
+      "$max" => %{"last_position" => position},
+      "$set" => %{"server_id" => server_id},
+      "$push" => %{
+        "recent" => %{
+          "$each" => [%{"message_id" => message_id, "position" => position}],
+          "$sort" => %{"position" => 1},
+          "$slice" => -@recent_positions
+        }
       }
-    )
+    }
+
+    case Mongo.update_one(@conn, @activity, filter, update, upsert: true) do
+      {:ok, _result} -> :ok
+      {:error, error} -> if duplicate_key?(error), do: :ok, else: {:error, error}
+    end
   end
 
   @impl true
@@ -454,23 +515,24 @@ defmodule Notifications.Unread.Repo.Mongo do
     end
   end
 
-  defp record_mentions([], _channel_id, _server_id, _message_id), do: :ok
+  defp record_mentions([], _channel_id, _server_id, _message_id, _position), do: :ok
 
-  defp record_mentions(user_ids, channel_id, server_id, message_id) do
+  defp record_mentions(user_ids, channel_id, server_id, message_id, position) do
     operations =
       Enum.map(user_ids, fn user_id ->
-        {marker_key(user_id, channel_id),
+        {"#{user_id}:#{message_id}",
          %{
-           "$max" => %{"last_mention_id" => message_id},
-           "$set" => %{
+           "$setOnInsert" => %{
              "user_id" => user_id,
              "channel_id" => channel_id,
-             "server_id" => server_id
+             "server_id" => server_id,
+             "message_id" => message_id,
+             "position" => position
            }
          }}
       end)
 
-    upsert_many(@mention_markers, operations)
+    upsert_many(@unread_mentions, operations)
   end
 
   defp upsert_many(_collection, []), do: :ok
@@ -487,12 +549,13 @@ defmodule Notifications.Unread.Repo.Mongo do
     end
   end
 
-  defp markers(_collection, _field, _user_id, []), do: {:ok, %{}}
+  defp by_user_channels(user_id, channel_ids),
+    do: %{"user_id" => user_id, "channel_id" => %{"$in" => channel_ids}}
 
-  defp markers(collection, field, user_id, channel_ids) do
-    with {:ok, docs} <-
-           list(collection, %{"user_id" => user_id, "channel_id" => %{"$in" => channel_ids}}) do
-      {:ok, Map.new(docs, fn doc -> {doc["channel_id"], doc[field]} end)}
+  defp delete_many(collection, filter) do
+    case Mongo.delete_many(@conn, collection, filter) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 

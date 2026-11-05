@@ -5,7 +5,7 @@ defmodule Notifications.Events.Lifecycle do
   alias Notifications.Events.Event
   alias Notifications.History
   alias Notifications.Push
-  alias Notifications.Unread.Repo
+  alias Notifications.Unread.{Position, Repo}
 
   @tombstone_ttl_seconds 7 * 24 * 60 * 60
 
@@ -124,6 +124,8 @@ defmodule Notifications.Events.Lifecycle do
   end
 
   def handle(%Event.MessageCreated{} = event) do
+    position = Position.of(event.occurred_at, event.message_id)
+
     with :alive <- server_state(event.server_id),
          :alive <- channel_state(event.channel_id),
          :ok <-
@@ -132,7 +134,8 @@ defmodule Notifications.Events.Lifecycle do
              server_id: event.server_id,
              message_id: event.message_id,
              author_id: event.author_id,
-             mentioned_user_ids: event.mentioned_user_ids
+             mentioned_user_ids: event.mentioned_user_ids,
+             position: position
            }),
          :ok <- History.record_mentions(event),
          :ok <-
@@ -141,7 +144,8 @@ defmodule Notifications.Events.Lifecycle do
              "channel_id" => event.channel_id,
              "message_id" => event.message_id,
              "author_id" => event.author_id,
-             "mentioned_user_ids" => event.mentioned_user_ids
+             "mentioned_user_ids" => event.mentioned_user_ids,
+             "position" => position
            }),
          :ok <- Delivery.notify(event) do
       Logger.debug("message_activity_recorded",

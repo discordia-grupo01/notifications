@@ -4,6 +4,7 @@ if mongo_url do
   defmodule Notifications.Unread.Repo.MongoTest do
     use ExUnit.Case, async: false
 
+    alias Notifications.Unread.Position
     alias Notifications.Unread.Repo.Mongo, as: Repo
 
     @t1 ~U[2026-10-23 12:00:00.000Z]
@@ -11,7 +12,7 @@ if mongo_url do
     @t3 ~U[2026-10-23 12:00:02.000Z]
 
     @collections ~w(
-      channels event_clocks channel_activity read_markers mention_markers
+      channels event_clocks channel_activity read_markers unread_mentions
       replica_servers replica_roles replica_members replica_overrides notification_settings
       notification_history
     )
@@ -28,13 +29,16 @@ if mongo_url do
 
     defp message_id(n), do: "00000000-0000-7000-8000-" <> String.pad_leading("#{n}", 12, "0")
 
+    defp position(n), do: Position.of(DateTime.add(@t1, n, :second), message_id(n))
+
     defp record(channel, server, n, author, mentions \\ []) do
       Repo.record_message(%{
         channel_id: channel,
         server_id: server,
         message_id: message_id(n),
         author_id: author,
-        mentioned_user_ids: mentions
+        mentioned_user_ids: mentions,
+        position: position(n)
       })
     end
 
@@ -80,7 +84,8 @@ if mongo_url do
         %{server: server, channel: channel, user: user} = ctx
         Repo.upsert_channel(%{"_id" => channel, "server_id" => server, "kind" => "text"})
         record(channel, server, 1, "someone", [user])
-        Repo.mark_read(user, channel, server, message_id(1))
+        Repo.mark_read(user, channel, server, position(1))
+        record(channel, server, 2, "someone", [user])
         Repo.apply_channel_overrides(server, channel, [], @t1)
 
         assert Repo.delete_channel(channel) == :ok
@@ -88,7 +93,7 @@ if mongo_url do
         assert Repo.get_channel(channel) == nil
         assert {:ok, %{}} = Repo.get_activity([channel])
         assert {:ok, %{}} = Repo.get_read_markers(user, [channel])
-        assert {:ok, %{}} = Repo.get_mention_markers(user, [channel])
+        assert {:ok, %{}} = Repo.get_unread_mentions(user, [channel])
         assert {:ok, []} = Repo.list_overrides([server])
       end
 
@@ -109,7 +114,7 @@ if mongo_url do
         assert {:ok, []} = Repo.list_overrides([server])
         assert {:ok, %{}} = Repo.get_server_owners([server])
         assert {:ok, %{}} = Repo.get_activity([channel])
-        assert {:ok, %{}} = Repo.get_mention_markers(user, [channel])
+        assert {:ok, %{}} = Repo.get_unread_mentions(user, [channel])
       end
     end
 
@@ -119,16 +124,86 @@ if mongo_url do
         record(c, s, 1, "a")
 
         assert {:ok, activity} = Repo.get_activity([c])
-        assert activity[c] == message_id(2)
+        assert activity[c] == position(2)
+      end
+
+      test "the last message follows the time of the messages, not their ids", %{
+        server: s,
+        channel: c
+      } do
+        older = "ffffffff-0000-5000-8000-000000000001"
+        newer = "00000000-0000-5000-8000-000000000002"
+
+        for {id, at} <- [{older, @t1}, {newer, @t2}] do
+          Repo.record_message(%{
+            channel_id: c,
+            server_id: s,
+            message_id: id,
+            author_id: "a",
+            mentioned_user_ids: ["b"],
+            position: Position.of(at, id)
+          })
+        end
+
+        assert {:ok, %{^c => last}} = Repo.get_activity([c])
+        assert last == Position.of(@t2, newer)
+        assert {:ok, %{^c => mentions}} = Repo.get_unread_mentions("b", [c])
+        assert Enum.sort(mentions) == [Position.of(@t1, older), Position.of(@t2, newer)]
       end
 
       test "recording the same message twice changes nothing", %{server: s, channel: c} do
         record(c, s, 1, "a", ["b"])
         record(c, s, 1, "a", ["b"])
 
-        assert {:ok, %{^c => id}} = Repo.get_activity([c])
-        assert id == message_id(1)
-        assert {:ok, %{^c => ^id}} = Repo.get_mention_markers("b", [c])
+        assert {:ok, %{^c => last}} = Repo.get_activity([c])
+        assert last == position(1)
+        assert Repo.get_unread_mentions("b", [c]) == {:ok, %{c => [position(1)]}}
+      end
+
+      test "find_position/2 knows where the recent messages of a channel are", %{
+        server: s,
+        channel: c
+      } do
+        record(c, s, 1, "a")
+        record(c, s, 2, "a")
+
+        assert Repo.find_position(c, message_id(1)) == {:ok, position(1)}
+        assert Repo.find_position(c, message_id(2)) == {:ok, position(2)}
+        assert Repo.find_position(c, message_id(3)) == {:ok, nil}
+        assert Repo.find_position("other-channel", message_id(1)) == {:ok, nil}
+      end
+
+      test "only the last messages of a channel are remembered", %{server: s, channel: c} do
+        for n <- 1..55, do: record(c, s, n, "a")
+
+        assert Repo.find_position(c, message_id(5)) == {:ok, nil}
+        assert Repo.find_position(c, message_id(6)) == {:ok, position(6)}
+        assert Repo.find_position(c, message_id(55)) == {:ok, position(55)}
+      end
+
+      test "data written before positions existed is ignored", %{server: s, channel: c} do
+        legacy = "e9346073-d02d-530f-aa8b-70b8d11f971e"
+
+        Mongo.insert_one(Notifications.Mongo, "channel_activity", %{
+          "_id" => c,
+          "server_id" => s,
+          "last_message_id" => legacy
+        })
+
+        Mongo.insert_one(Notifications.Mongo, "read_markers", %{
+          "_id" => "u:" <> c,
+          "user_id" => "u",
+          "channel_id" => c,
+          "server_id" => s,
+          "last_read_id" => legacy
+        })
+
+        assert Repo.get_activity([c]) == {:ok, %{}}
+        assert Repo.get_read_markers("u", [c]) == {:ok, %{}}
+
+        record(c, s, 1, "a")
+
+        assert Repo.get_activity([c]) == {:ok, %{c => position(1)}}
       end
 
       test "a message in an unknown channel registers it as a text channel", %{
@@ -156,42 +231,60 @@ if mongo_url do
       test "the author's own message counts as read for them", %{server: s, channel: c} do
         record(c, s, 3, "author")
 
-        assert {:ok, %{^c => id}} = Repo.get_read_markers("author", [c])
-        assert id == message_id(3)
+        assert {:ok, %{^c => read}} = Repo.get_read_markers("author", [c])
+        assert read == position(3)
         assert {:ok, markers} = Repo.get_read_markers("someone-else", [c])
         assert markers == %{}
       end
 
-      test "every mentioned user gets a mention marker", %{server: s, channel: c} do
+      test "every mention is kept for the mentioned users", %{server: s, channel: c} do
         record(c, s, 1, "author", ["m1", "m2"])
         record(c, s, 2, "author", ["m1"])
 
-        assert {:ok, %{^c => latest}} = Repo.get_mention_markers("m1", [c])
-        assert latest == message_id(2)
-        assert {:ok, %{^c => first}} = Repo.get_mention_markers("m2", [c])
-        assert first == message_id(1)
-        assert {:ok, markers} = Repo.get_mention_markers("author", [c])
-        assert markers == %{}
+        assert {:ok, %{^c => mentions}} = Repo.get_unread_mentions("m1", [c])
+        assert Enum.sort(mentions) == [position(1), position(2)]
+        assert Repo.get_unread_mentions("m2", [c]) == {:ok, %{c => [position(1)]}}
+        assert Repo.get_unread_mentions("author", [c]) == {:ok, %{}}
       end
 
       test "a read marker never goes backwards", %{server: s, channel: c} do
-        Repo.mark_read("u", c, s, message_id(5))
-        Repo.mark_read("u", c, s, message_id(2))
+        Repo.mark_read("u", c, s, position(5))
+        Repo.mark_read("u", c, s, position(2))
 
-        assert {:ok, %{^c => id}} = Repo.get_read_markers("u", [c])
-        assert id == message_id(5)
+        assert {:ok, %{^c => read}} = Repo.get_read_markers("u", [c])
+        assert read == position(5)
+      end
+
+      test "reading a channel forgets the mentions up to that point", %{server: s, channel: c} do
+        record(c, s, 1, "a", ["u", "v"])
+        record(c, s, 2, "a", ["u"])
+
+        assert Repo.mark_read("u", c, s, position(1)) == :ok
+
+        assert Repo.get_unread_mentions("u", [c]) == {:ok, %{c => [position(2)]}}
+        assert Repo.get_unread_mentions("v", [c]) == {:ok, %{c => [position(1)]}}
       end
 
       test "mark_all_read writes a marker per channel in one go", %{server: s, user: u} do
         entries =
-          for n <- 1..5, do: %{channel_id: "c#{n}-#{u}", server_id: s, message_id: message_id(n)}
+          for n <- 1..5, do: %{channel_id: "c#{n}-#{u}", server_id: s, position: position(n)}
 
         assert Repo.mark_all_read(u, entries) == :ok
 
         ids = Enum.map(entries, & &1.channel_id)
         assert {:ok, markers} = Repo.get_read_markers(u, ids)
         assert map_size(markers) == 5
-        assert markers["c3-#{u}"] == message_id(3)
+        assert markers["c3-#{u}"] == position(3)
+      end
+
+      test "mark_all_read forgets the mentions it read", %{server: s, channel: c, user: u} do
+        record(c, s, 1, "a", [u])
+        record(c, s, 2, "a", [u])
+
+        assert Repo.mark_all_read(u, [%{channel_id: c, server_id: s, position: position(2)}]) ==
+                 :ok
+
+        assert Repo.get_unread_mentions(u, [c]) == {:ok, %{}}
       end
 
       test "mark_all_read never moves a marker backwards and is repeatable", %{
@@ -199,20 +292,20 @@ if mongo_url do
         channel: c,
         user: u
       } do
-        Repo.mark_read(u, c, s, message_id(9))
+        Repo.mark_read(u, c, s, position(9))
 
-        assert Repo.mark_all_read(u, [%{channel_id: c, server_id: s, message_id: message_id(4)}]) ==
+        assert Repo.mark_all_read(u, [%{channel_id: c, server_id: s, position: position(4)}]) ==
                  :ok
 
-        assert Repo.mark_all_read(u, [%{channel_id: c, server_id: s, message_id: message_id(4)}]) ==
+        assert Repo.mark_all_read(u, [%{channel_id: c, server_id: s, position: position(4)}]) ==
                  :ok
 
-        assert {:ok, %{^c => id}} = Repo.get_read_markers(u, [c])
-        assert id == message_id(9)
+        assert {:ok, %{^c => read}} = Repo.get_read_markers(u, [c])
+        assert read == position(9)
       end
 
       test "mark_all_read leaves other users alone", %{server: s, channel: c, user: u} do
-        Repo.mark_all_read(u, [%{channel_id: c, server_id: s, message_id: message_id(4)}])
+        Repo.mark_all_read(u, [%{channel_id: c, server_id: s, position: position(4)}])
 
         assert {:ok, markers} = Repo.get_read_markers("someone-else", [c])
         assert markers == %{}
@@ -225,7 +318,7 @@ if mongo_url do
       test "queries with no channels are empty" do
         assert Repo.get_activity([]) == {:ok, %{}}
         assert Repo.get_read_markers("u", []) == {:ok, %{}}
-        assert Repo.get_mention_markers("u", []) == {:ok, %{}}
+        assert Repo.get_unread_mentions("u", []) == {:ok, %{}}
       end
     end
 
@@ -257,7 +350,7 @@ if mongo_url do
       test "leaving removes the membership and the user's markers", ctx do
         %{server: s, channel: c, user: u} = ctx
         Repo.record_member_joined(s, u, @t1)
-        Repo.mark_read(u, c, s, message_id(1))
+        Repo.mark_read(u, c, s, position(1))
         record(c, s, 2, "other", [u])
 
         assert {:ok, :applied} = Repo.delete_member(s, u, @t2)
@@ -265,7 +358,7 @@ if mongo_url do
         assert {:ok, []} = Repo.list_memberships(u)
         assert {:ok, markers} = Repo.get_read_markers(u, [c])
         assert markers == %{}
-        assert {:ok, markers} = Repo.get_mention_markers(u, [c])
+        assert {:ok, markers} = Repo.get_unread_mentions(u, [c])
         assert markers == %{}
       end
 

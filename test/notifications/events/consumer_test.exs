@@ -166,6 +166,7 @@ if rabbitmq_url && mongo_url do
       })
 
       publish(chan, "messaging.message_created", %{
+        "occurred_at" => iso(DateTime.add(DateTime.utc_now(), 10, :second)),
         "server_id" => server,
         "channel_id" => channel,
         "message_id" => later(10),
@@ -250,6 +251,36 @@ if rabbitmq_url && mongo_url do
       assert flags(me, channel) == %{unread: false, mention: false}
     end
 
+    test "messages are ordered by when they were sent, not by their ids", ctx do
+      %{chan: chan, server: server, channel: channel, me: me, other: other} = ctx
+      seed_membership(ctx)
+      first = "ffffffff-ffff-5fff-bfff-ffffffffffff"
+      second = "00000000-0000-5000-8000-000000000001"
+
+      publish(chan, "messaging.message_created", %{
+        "server_id" => server,
+        "channel_id" => channel,
+        "message_id" => first,
+        "author_id" => other,
+        "mentioned_user_ids" => []
+      })
+
+      assert wait_until(fn -> flags(me, channel).unread end)
+      assert {:ok, _up_to} = Unread.mark_read(me, channel, first)
+      assert flags(me, channel) == %{unread: false, mention: false}
+
+      publish(chan, "messaging.message_created", %{
+        "occurred_at" => iso(DateTime.add(DateTime.utc_now(), 1, :second)),
+        "server_id" => server,
+        "channel_id" => channel,
+        "message_id" => second,
+        "author_id" => other,
+        "mentioned_user_ids" => [me]
+      })
+
+      assert wait_until(fn -> flags(me, channel) == %{unread: true, mention: true} end)
+    end
+
     test "the member's own messages never make the channel unread for them", ctx do
       %{chan: chan, server: server, channel: channel, me: me} = ctx
       seed_membership(ctx)
@@ -274,12 +305,11 @@ if rabbitmq_url && mongo_url do
       %{chan: chan, server: server, channel: channel, me: me, other: other} = ctx
       seed_membership(ctx)
 
-      old = DateTime.utc_now() |> DateTime.add(-3_600, :second) |> Notifications.UUID.floor_v7()
-
       publish(chan, "messaging.message_created", %{
+        "occurred_at" => iso(DateTime.add(DateTime.utc_now(), -3_600, :second)),
         "server_id" => server,
         "channel_id" => channel,
-        "message_id" => old,
+        "message_id" => Notifications.UUID.generate(),
         "author_id" => other,
         "mentioned_user_ids" => []
       })
