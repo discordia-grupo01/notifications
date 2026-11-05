@@ -65,6 +65,11 @@ defmodule NotificationsWeb.NotificationsChannel do
      )}
   end
 
+  def handle_info(%Broadcast{event: "status_changed", payload: payload}, socket) do
+    push(socket, "status_changed", payload)
+    {:noreply, socket}
+  end
+
   def handle_info(
         %Broadcast{event: "read", payload: %{"channel_id" => id, "message_id" => up_to}},
         socket
@@ -135,6 +140,7 @@ defmodule NotificationsWeb.NotificationsChannel do
   defp subscribe(socket, state) do
     wanted =
       MapSet.new([
+        "platform",
         "user:" <> user_id(socket) | Enum.map(State.server_ids(state), &("server:" <> &1))
       ])
 

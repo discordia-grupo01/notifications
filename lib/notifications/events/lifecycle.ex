@@ -188,6 +188,10 @@ defmodule Notifications.Events.Lifecycle do
     Delivery.notify(event)
   end
 
+  def handle(%Event.PlatformStatusChanged{} = event) do
+    Push.publish("platform", "status_changed", %{"refetch" => true, "status" => event.status})
+  end
+
   def handle(%Event.UserProfileUpdated{} = event) do
     with {:ok, :applied} <-
            delivery_repo().apply_user_name(event.user_id, event.name, event.version) do

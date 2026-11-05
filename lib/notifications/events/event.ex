@@ -156,6 +156,11 @@ defmodule Notifications.Events.Event do
     ]
   end
 
+  defmodule PlatformStatusChanged do
+    @enforce_keys [:event_id, :occurred_at, :status]
+    defstruct [:event_id, :occurred_at, :status]
+  end
+
   @routing_keys [
     {"servers.channel_created", ChannelCreated},
     {"servers.channel_deleted", ChannelDeleted},
@@ -174,7 +179,8 @@ defmodule Notifications.Events.Event do
     {"users.profile_updated", UserProfileUpdated},
     {"servers.server_updated", ServerUpdated},
     {"messaging.user_presence_changed", UserPresenceChanged},
-    {"voice.private_call", PrivateCall}
+    {"voice.private_call", PrivateCall},
+    {"platform.status_changed", PlatformStatusChanged}
   ]
 
   @connections ~w(active idle none)
@@ -300,6 +306,15 @@ defmodule Notifications.Events.Event do
     with {:ok, base} <-
            strings(payload, ~w(event_id call_id conversation_id caller_id recipient_id status)a) do
       {:ok, base}
+    end
+
+    defp fields(PlatformStatusChanged, payload) do
+      with {:ok, base} <- strings(payload, ~w(event_id status)a),
+           true <- base.status in ~w(operational degraded maintenance) do
+        {:ok, base}
+      else
+        _invalid -> {:error, :invalid_payload}
+      end
     end
   end
 
