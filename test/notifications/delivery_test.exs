@@ -75,8 +75,8 @@ defmodule Notifications.DeliveryTest do
     await_deliveries()
 
     assert_received {:push, "beto", payload}
-    assert payload.title == "Mensaje directo"
-    assert payload.body == "Ana: hola"
+    assert payload.title == "Ana"
+    assert payload.body == "hola"
 
     assert payload.data == %{
              "kind" => "direct_message",
@@ -86,7 +86,7 @@ defmodule Notifications.DeliveryTest do
            }
   end
 
-  test "a mention in a channel becomes a push titled Server - Channel" do
+  test "a mention in a channel becomes a push titled Name en #channel" do
     test_pid = self()
     expect(UnreadRepoMock, :list_settings_by_scope, fn ["c1", "s1"] -> {:ok, []} end)
     reachable("beto")
@@ -104,8 +104,8 @@ defmodule Notifications.DeliveryTest do
     await_deliveries()
 
     assert_received {:push, payload}
-    assert payload.title == "Mi server - general"
-    assert payload.body == "Ana: @usuario mirá esto"
+    assert payload.title == "Ana en #general"
+    assert payload.body == "Mi server · @usuario mirá esto"
     assert payload.data["kind"] == "mention"
     assert payload.data["channel_id"] == "c1"
   end
@@ -220,7 +220,8 @@ defmodule Notifications.DeliveryTest do
       await_deliveries()
 
       assert_received {:push, payload}
-      assert payload.body == "Ana: ahora con mención (editado)"
+      assert payload.title == "Ana en #general"
+      assert payload.body == "Mi server · ahora con mención (editado)"
       assert payload.data["kind"] == "mention"
       assert payload.data["edited"] == true
     end
