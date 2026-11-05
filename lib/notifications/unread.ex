@@ -1,9 +1,7 @@
 defmodule Notifications.Unread do
   alias Notifications.UUID
   alias Notifications.Settings
-  alias Notifications.Unread.{Access, Repo, State}
-
-  @max_future_seconds 60
+  alias Notifications.Unread.{Access, Position, Repo, State}
 
   @spec mongo_ready?() :: boolean()
   def mongo_ready?, do: Repo.impl().ping() == :ok
@@ -16,14 +14,22 @@ defmodule Notifications.Unread do
          channel_ids = Enum.map(visible, & &1.channel_id),
          {:ok, activity} <- repo.get_activity(channel_ids),
          {:ok, reads} <- repo.get_read_markers(user_id, channel_ids),
-         {:ok, mentions} <- repo.get_mention_markers(user_id, channel_ids),
+         {:ok, mentions} <- repo.get_unread_mentions(user_id, channel_ids),
          {:ok, settings} <- Settings.scopes(user_id) do
       {:ok, visible |> State.build(activity, reads, mentions) |> State.apply_settings(settings)}
     end
   end
 
+  @doc """
+  Reads the channel up to `message_id`, or up to its last known message without it.
+
+  The read position is the message's place in the timeline, which is only known once its
+  event arrived. The client may read a message before that (it sees it live through
+  `messaging`), so an id whose event has not arrived yet reads up to now: anything older
+  than the moment the user looked at the channel counts as seen.
+  """
   @spec mark_read(String.t(), String.t(), String.t() | nil) ::
-          {:ok, String.t() | nil}
+          {:ok, Position.t() | nil}
           | {:error, :channel_not_found | :forbidden | :invalid_payload | term()}
   def mark_read(user_id, channel_id, message_id \\ nil) do
     repo = Repo.impl()
@@ -51,8 +57,8 @@ defmodule Notifications.Unread do
   defp unread_entries(visible, activity, reads) do
     for %{channel_id: id, server_id: server_id, floor: floor} <- visible,
         last = Map.get(activity, id),
-        last > Enum.max([floor, Map.get(reads, id, "")]) do
-      %{channel_id: id, server_id: server_id, message_id: last}
+        Position.after?(last, Position.max(floor, Map.get(reads, id))) do
+      %{channel_id: id, server_id: server_id, position: last}
     end
   end
 
@@ -68,9 +74,20 @@ defmodule Notifications.Unread do
     with :ok <- repo.mark_read(user_id, channel_id, server_id, up_to), do: {:ok, up_to}
   end
 
-  defp resolve(_repo, _channel_id, requested) when is_binary(requested), do: {:ok, requested}
+  defp resolve(repo, channel_id, nil), do: last_position(repo, channel_id)
 
-  defp resolve(repo, channel_id, nil) do
+  defp resolve(repo, channel_id, message_id) do
+    case repo.find_position(channel_id, message_id) do
+      {:ok, nil} ->
+        with {:ok, last} <- last_position(repo, channel_id),
+             do: {:ok, Position.max(last, Position.floor(DateTime.utc_now()))}
+
+      found ->
+        found
+    end
+  end
+
+  defp last_position(repo, channel_id) do
     with {:ok, activity} <- repo.get_activity([channel_id]),
          do: {:ok, Map.get(activity, channel_id)}
   end
@@ -78,13 +95,8 @@ defmodule Notifications.Unread do
   defp validate_message_id(id) when id in [nil, ""], do: {:ok, nil}
 
   defp validate_message_id(id) when is_binary(id) do
-    if UUID.v7?(id) and id <= future_limit(),
-      do: {:ok, id},
-      else: {:error, :invalid_payload}
+    if UUID.valid?(id), do: {:ok, id}, else: {:error, :invalid_payload}
   end
 
   defp validate_message_id(_other), do: {:error, :invalid_payload}
-
-  defp future_limit,
-    do: DateTime.utc_now() |> DateTime.add(@max_future_seconds, :second) |> UUID.floor_v7()
 end

@@ -250,6 +250,7 @@ defmodule Notifications.Events.LifecycleTest do
     test "records the activity, the history of whoever it mentions and pushes it to the sockets" do
       alive()
       channel_alive()
+      position = Notifications.Unread.Position.of(message_event().occurred_at, "m1")
 
       expect(RepoMock, :record_message, fn attrs ->
         assert attrs == %{
@@ -257,7 +258,8 @@ defmodule Notifications.Events.LifecycleTest do
                  server_id: "s1",
                  message_id: "m1",
                  author_id: "u1",
-                 mentioned_user_ids: ["u2"]
+                 mentioned_user_ids: ["u2"],
+                 position: position
                }
 
         :ok
@@ -276,7 +278,8 @@ defmodule Notifications.Events.LifecycleTest do
                  "channel_id" => "c1",
                  "message_id" => "m1",
                  "author_id" => "u1",
-                 "mentioned_user_ids" => ["u2"]
+                 "mentioned_user_ids" => ["u2"],
+                 "position" => position
                }
 
         :ok

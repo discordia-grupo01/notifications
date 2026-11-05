@@ -54,7 +54,8 @@ defmodule NotificationsWeb.NotificationsChannel do
       channel_id: payload["channel_id"],
       message_id: payload["message_id"],
       author_id: payload["author_id"],
-      mentioned_user_ids: payload["mentioned_user_ids"] || []
+      mentioned_user_ids: payload["mentioned_user_ids"] || [],
+      position: payload["position"]
     }
 
     {:noreply,
@@ -71,7 +72,7 @@ defmodule NotificationsWeb.NotificationsChannel do
   end
 
   def handle_info(
-        %Broadcast{event: "read", payload: %{"channel_id" => id, "message_id" => up_to}},
+        %Broadcast{event: "read", payload: %{"channel_id" => id, "position" => up_to}},
         socket
       ),
       do: {:noreply, update_state(socket, id, &State.mark_read(&1, id, up_to))}
@@ -182,7 +183,7 @@ defmodule NotificationsWeb.NotificationsChannel do
   defp publish_read(user_id, channel_id, up_to) do
     case Push.publish("user:" <> user_id, "read", %{
            "channel_id" => channel_id,
-           "message_id" => up_to
+           "position" => up_to
          }) do
       :ok ->
         :ok

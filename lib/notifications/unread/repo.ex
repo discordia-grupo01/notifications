@@ -1,7 +1,8 @@
 defmodule Notifications.Unread.Repo do
   @type result :: :ok | {:error, term()}
   @type write_result :: {:ok, :applied | :stale} | {:error, term()}
-  @type read_entry :: %{channel_id: String.t(), server_id: String.t(), message_id: String.t()}
+  @type position :: Notifications.Unread.Position.t()
+  @type read_entry :: %{channel_id: String.t(), server_id: String.t(), position: position()}
   @type setting_changes :: %{optional(:muted) => boolean(), optional(:level) => String.t() | nil}
   @type override :: %{role_id: String.t(), allow: [String.t()], deny: [String.t()]}
 
@@ -45,16 +46,18 @@ defmodule Notifications.Unread.Repo do
               server_id: String.t(),
               message_id: String.t(),
               author_id: String.t(),
-              mentioned_user_ids: [String.t()]
+              mentioned_user_ids: [String.t()],
+              position: position()
             }) :: result()
-  @callback get_activity([String.t()]) :: {:ok, %{String.t() => String.t()}} | {:error, term()}
+  @callback get_activity([String.t()]) :: {:ok, %{String.t() => position()}} | {:error, term()}
+  @callback find_position(channel_id :: String.t(), message_id :: String.t()) ::
+              {:ok, position() | nil} | {:error, term()}
   @callback get_read_markers(String.t(), [String.t()]) ::
-              {:ok, %{String.t() => String.t()}} | {:error, term()}
-  @callback get_mention_markers(String.t(), [String.t()]) ::
-              {:ok, %{String.t() => String.t()}} | {:error, term()}
+              {:ok, %{String.t() => position()}} | {:error, term()}
+  @callback get_unread_mentions(String.t(), [String.t()]) ::
+              {:ok, %{String.t() => [position()]}} | {:error, term()}
   @callback mark_all_read(user_id :: String.t(), [read_entry()]) :: result()
-  @callback mark_read(user_id :: String.t(), String.t(), String.t(), message_id :: String.t()) ::
-              result()
+  @callback mark_read(user_id :: String.t(), String.t(), String.t(), position()) :: result()
 
   @callback list_settings(user_id :: String.t()) :: {:ok, [map()]} | {:error, term()}
   @callback get_setting(user_id :: String.t(), scope_id :: String.t()) ::

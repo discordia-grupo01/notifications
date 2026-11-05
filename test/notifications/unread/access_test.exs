@@ -107,7 +107,7 @@ defmodule Notifications.Unread.AccessTest do
     test "the floor is the UUIDv7 of the moment the user joined" do
       [%{floor: floor}] = compute([member()], [text("c1")])
 
-      assert floor == Notifications.UUID.floor_v7(@joined)
+      assert floor == Notifications.Unread.Position.floor(@joined)
     end
 
     test "a membership without joined_at falls back to inserted_at and then to the epoch" do
@@ -121,8 +121,8 @@ defmodule Notifications.Unread.AccessTest do
 
       [%{floor: from_epoch}] = compute([Map.delete(member(), "joined_at")], [text("c1")])
 
-      assert from_inserted == Notifications.UUID.floor_v7(inserted)
-      assert from_epoch == Notifications.UUID.floor_v7(~U[1970-01-01 00:00:00Z])
+      assert from_inserted == Notifications.Unread.Position.floor(inserted)
+      assert from_epoch == Notifications.Unread.Position.floor(~U[1970-01-01 00:00:00Z])
     end
   end
 

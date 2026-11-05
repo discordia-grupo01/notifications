@@ -1,6 +1,5 @@
 defmodule Notifications.Unread.Access do
-  alias Notifications.UUID
-  alias Notifications.Unread.{Permissions, Repo}
+  alias Notifications.Unread.{Permissions, Position, Repo}
 
   @epoch ~U[1970-01-01 00:00:00Z]
 
@@ -58,7 +57,7 @@ defmodule Notifications.Unread.Access do
       %{
         channel_id: channel["_id"],
         server_id: member["server_id"],
-        floor: member |> member_since() |> UUID.floor_v7()
+        floor: member |> member_since() |> Position.floor()
       }
     end
   end
