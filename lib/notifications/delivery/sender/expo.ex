@@ -4,17 +4,22 @@ defmodule Notifications.Delivery.Sender.Expo do
   alias Notifications.Delivery.{Config, Http}
 
   @incoming_call_category "private_call_incoming"
+  @incoming_call_channel "private_calls"
+  @incoming_call_sound "llamada_entrante.wav"
+  @message_channel "messages"
+  @message_sound "nuevo_mensaje.wav"
 
   @impl true
   def send(%{"credential" => %{"token" => token}}, payload) do
     message =
-      put_category(
+      put_incoming_call(
         %{
           "to" => token,
           "title" => payload.title,
           "body" => payload.body,
           "data" => payload.data,
-          "sound" => "default",
+          "sound" => @message_sound,
+          "channelId" => @message_channel,
           "priority" => "high"
         },
         payload.data
@@ -27,10 +32,15 @@ defmodule Notifications.Delivery.Sender.Expo do
 
   def send(_device, _payload), do: {:error, :invalid_token}
 
-  defp put_category(message, %{"call_id" => _call_id, "status" => "ringing"}),
-    do: Map.put(message, "categoryId", @incoming_call_category)
+  defp put_incoming_call(message, %{"call_id" => _call_id, "status" => "ringing"}) do
+    Map.merge(message, %{
+      "categoryId" => @incoming_call_category,
+      "channelId" => @incoming_call_channel,
+      "sound" => @incoming_call_sound
+    })
+  end
 
-  defp put_category(message, _data), do: message
+  defp put_incoming_call(message, _data), do: message
 
   defp headers do
     base = [{"content-type", "application/json"}, {"accept", "application/json"}]
