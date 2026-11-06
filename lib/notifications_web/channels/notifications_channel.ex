@@ -71,6 +71,11 @@ defmodule NotificationsWeb.NotificationsChannel do
     {:noreply, socket}
   end
 
+  def handle_info(%Broadcast{event: "health_check_changed", payload: payload}, socket) do
+    push(socket, "health_check_changed", payload)
+    {:noreply, socket}
+  end
+
   def handle_info(
         %Broadcast{event: "read", payload: %{"channel_id" => id, "position" => up_to}},
         socket

@@ -143,6 +143,23 @@ defmodule NotificationsWeb.NotificationsChannelTest do
   end
 
   describe "live updates" do
+    test "forwards health check suggestions to the connected staff client" do
+      join_own()
+      assert_push "snapshot", _
+
+      Endpoint.broadcast("user:" <> @me, "health_check_changed", %{
+        "service" => "servers",
+        "previous_status" => "operational",
+        "status" => "degraded",
+        "consecutive_failures" => 2
+      })
+
+      assert_push "health_check_changed", %{
+        "service" => "servers",
+        "status" => "degraded"
+      }
+    end
+
     test "forwards platform status changes so clients can refetch the current status" do
       join_own()
       assert_push "snapshot", _
