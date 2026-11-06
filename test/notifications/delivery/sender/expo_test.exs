@@ -13,7 +13,7 @@ defmodule Notifications.Delivery.Sender.ExpoTest do
   defp reply(status, body, headers \\ []),
     do: {:ok, %{status: status, headers: headers, body: Jason.encode!(body)}}
 
-  test "sends one message with the title, body and data and accepts an ok ticket" do
+  test "sends one message with the message sound and accepts an ok ticket" do
     expect(HttpMock, :post, fn url, headers, body, _timeout ->
       assert url == "https://exp.host/--/api/v2/push/send"
       assert {"content-type", "application/json"} in headers
@@ -24,7 +24,8 @@ defmodule Notifications.Delivery.Sender.ExpoTest do
                "title" => "Srv - general",
                "body" => "Ana: hola",
                "data" => %{"kind" => "mention"},
-               "sound" => "default",
+               "sound" => "nuevo_mensaje.wav",
+               "channelId" => "messages",
                "priority" => "high"
              }
 
@@ -34,7 +35,7 @@ defmodule Notifications.Delivery.Sender.ExpoTest do
     assert Expo.send(@device, @payload) == :ok
   end
 
-  test "an incoming call carries the category with the answer and decline buttons" do
+  test "an incoming call rings with its own channel, sound and answer/decline buttons" do
     ringing = %{
       title: "Llamada de voz",
       body: "Ana te está llamando",
@@ -42,14 +43,17 @@ defmodule Notifications.Delivery.Sender.ExpoTest do
     }
 
     expect(HttpMock, :post, fn _url, _headers, body, _timeout ->
-      assert Jason.decode!(body)["categoryId"] == "private_call_incoming"
+      message = Jason.decode!(body)
+      assert message["categoryId"] == "private_call_incoming"
+      assert message["channelId"] == "private_calls"
+      assert message["sound"] == "llamada_entrante.wav"
       reply(200, %{"data" => %{"status" => "ok"}})
     end)
 
     assert Expo.send(@device, ringing) == :ok
   end
 
-  test "a call that is no longer ringing has no buttons" do
+  test "a call that is no longer ringing has no buttons and the message sound" do
     missed = %{
       title: "Llamada de voz",
       body: "La llamada de voz no fue respondida",
@@ -57,7 +61,10 @@ defmodule Notifications.Delivery.Sender.ExpoTest do
     }
 
     expect(HttpMock, :post, fn _url, _headers, body, _timeout ->
-      refute Map.has_key?(Jason.decode!(body), "categoryId")
+      message = Jason.decode!(body)
+      refute Map.has_key?(message, "categoryId")
+      assert message["channelId"] == "messages"
+      assert message["sound"] == "nuevo_mensaje.wav"
       reply(200, %{"data" => %{"status" => "ok"}})
     end)
 
