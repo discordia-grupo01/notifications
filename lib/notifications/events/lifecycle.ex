@@ -196,6 +196,20 @@ defmodule Notifications.Events.Lifecycle do
     Push.publish("platform", "status_changed", %{"refetch" => true, "status" => event.status})
   end
 
+  def handle(%Event.PlatformHealthChanged{} = event) do
+    Enum.reduce_while(event.audience_user_ids, :ok, fn user_id, :ok ->
+      case Push.publish("user:" <> user_id, "health_check_changed", %{
+             "service" => event.service,
+             "previous_status" => event.previous_status,
+             "status" => event.status,
+             "consecutive_failures" => event.consecutive_failures
+           }) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
   def handle(%Event.UserProfileUpdated{} = event) do
     with {:ok, :applied} <-
            delivery_repo().apply_user_name(event.user_id, event.name, event.version) do

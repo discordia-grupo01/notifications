@@ -17,7 +17,7 @@ defmodule Notifications.Events.EventTest do
                messaging.message_created messaging.direct_message_created
                messaging.message_updated messaging.message_deleted
                users.profile_updated servers.server_updated messaging.user_presence_changed
-               voice.private_call platform.status_changed
+               voice.private_call platform.status_changed platform.health_changed
              ))
   end
 
@@ -112,6 +112,26 @@ defmodule Notifications.Events.EventTest do
 
     assert {:ok, %Event.PlatformStatusChanged{status: "degraded"}} =
              Event.parse("platform.status_changed", payload)
+  end
+
+  test "parses platform.health_changed with its staff audience" do
+    payload =
+      base(%{
+        "service" => "servers",
+        "previous_status" => "operational",
+        "status" => "degraded",
+        "consecutive_failures" => 2,
+        "audience_user_ids" => ["u1", "u1", "u2"]
+      })
+
+    assert {:ok,
+            %Event.PlatformHealthChanged{
+              service: "servers",
+              previous_status: "operational",
+              status: "degraded",
+              consecutive_failures: 2,
+              audience_user_ids: ["u1", "u2"]
+            }} = Event.parse("platform.health_changed", payload)
   end
 
   test "parses messaging.message_updated with the mentions it has after the edit" do

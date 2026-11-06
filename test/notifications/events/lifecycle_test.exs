@@ -368,6 +368,34 @@ defmodule Notifications.Events.LifecycleTest do
       assert Lifecycle.handle(event) == :ok
     end
 
+    test "platform.health_changed notifies each staff user's socket" do
+      event =
+        struct!(Event.PlatformHealthChanged, %{
+          event_id: "e1",
+          occurred_at: @at,
+          service: "servers",
+          previous_status: "operational",
+          status: "degraded",
+          consecutive_failures: 2,
+          audience_user_ids: ["u1", "u2"]
+        })
+
+      expect(PushMock, :publish, 2, fn topic, "health_check_changed", payload ->
+        assert topic in ["user:u1", "user:u2"]
+
+        assert payload == %{
+                 "service" => "servers",
+                 "previous_status" => "operational",
+                 "status" => "degraded",
+                 "consecutive_failures" => 2
+               }
+
+        :ok
+      end)
+
+      assert Lifecycle.handle(event) == :ok
+    end
+
     test "returns the push failure so the event can be retried" do
       event = struct!(Event.PlatformStatusChanged, base(%{status: "operational"}))
 
