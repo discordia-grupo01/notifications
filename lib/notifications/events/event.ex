@@ -161,6 +161,27 @@ defmodule Notifications.Events.Event do
     defstruct [:event_id, :occurred_at, :status]
   end
 
+  defmodule PlatformHealthChanged do
+    @enforce_keys [
+      :event_id,
+      :occurred_at,
+      :service,
+      :previous_status,
+      :status,
+      :consecutive_failures,
+      :audience_user_ids
+    ]
+    defstruct [
+      :event_id,
+      :occurred_at,
+      :service,
+      :previous_status,
+      :status,
+      :consecutive_failures,
+      :audience_user_ids
+    ]
+  end
+
   @routing_keys [
     {"servers.channel_created", ChannelCreated},
     {"servers.channel_deleted", ChannelDeleted},
@@ -180,7 +201,8 @@ defmodule Notifications.Events.Event do
     {"servers.server_updated", ServerUpdated},
     {"messaging.user_presence_changed", UserPresenceChanged},
     {"voice.private_call", PrivateCall},
-    {"platform.status_changed", PlatformStatusChanged}
+    {"platform.status_changed", PlatformStatusChanged},
+    {"platform.health_changed", PlatformHealthChanged}
   ]
 
   @connections ~w(active idle none)
@@ -313,6 +335,21 @@ defmodule Notifications.Events.Event do
     with {:ok, base} <- strings(payload, ~w(event_id status)a),
          true <- base.status in ~w(operational degraded maintenance) do
       {:ok, base}
+    else
+      _invalid -> {:error, :invalid_payload}
+    end
+  end
+
+  defp fields(PlatformHealthChanged, payload) do
+    with {:ok, base} <- strings(payload, ~w(event_id service previous_status status)a),
+         true <- base.previous_status in ~w(unknown operational degraded),
+         true <- base.status in ~w(operational degraded),
+         {:ok, consecutive_failures} <- integer(payload, "consecutive_failures"),
+         {:ok, audience_user_ids} <- string_list(payload, "audience_user_ids") do
+      {:ok,
+       base
+       |> Map.put(:consecutive_failures, consecutive_failures)
+       |> Map.put(:audience_user_ids, Enum.uniq(audience_user_ids))}
     else
       _invalid -> {:error, :invalid_payload}
     end
