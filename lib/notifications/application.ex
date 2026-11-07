@@ -7,6 +7,7 @@ defmodule Notifications.Application do
   def start(_type, _args) do
     mongo_url = Application.fetch_env!(:notifications, :mongo_url)
     Notifications.Log.Telemetry.attach()
+    Notifications.Tracing.attach()
 
     Logger.info("service_started",
       version: to_string(Application.spec(:notifications, :vsn)),
