@@ -543,6 +543,21 @@ docker compose up -d mongo rabbitmq
 mix phx.server
 ```
 
+## Trazas (OpenTelemetry)
+
+El servicio manda trazas a cualquier backend que hable OTLP por HTTP (New Relic, Grafana Cloud, un colector propio). Está **apagado por defecto**: sin `OTEL_EXPORTER_OTLP_ENDPOINT` no se exporta nada y el servicio funciona igual.
+
+| Variable | Para qué |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | URL base del backend. En New Relic (cuenta de EE. UU.): `https://otlp.nr-data.net` |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Credenciales, por ejemplo `api-key=<clave de licencia de ingesta>`. Es un secreto: va solo en las variables de entorno del despliegue, nunca en el repositorio |
+| `OTEL_SERVICE_NAME` | Nombre con el que aparece el servicio (por defecto `notifications`) |
+
+- **Pedidos HTTP:** un span por pedido (`Notifications.Tracing`), llamado como el patrón de la ruta (`PUT /v1/notifications/settings/servers/:server_id`). Solo guarda `http.request.method`, `http.route` y `http.response.status_code`: nunca el path real, la query string, headers ni la IP. Si el pedido trae un `traceparent`, la traza continúa desde ahí.
+- **Eventos de RabbitMQ:** el consumidor de `notifications.unread_state` abre un span `<routing key> process` dentro de la traza que llega en la cabecera `traceparent` del mensaje; si el evento va a reintento, el span queda marcado como error. Si el mensaje no la trae, empieza una traza nueva.
+- **Logs:** las líneas escritas mientras corre un pedido o un evento llevan `trace_id` y `span_id`.
+- **Todavía sin instrumentar:** las consultas a Mongo, los canales de WebSocket y los envíos a Expo y a Web Push.
+
 ## Tests
 ```bash
 mix test --cover
