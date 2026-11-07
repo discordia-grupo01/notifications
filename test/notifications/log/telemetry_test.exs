@@ -88,6 +88,12 @@ defmodule Notifications.Log.TelemetryTest do
       end
     end
 
+    test "a failing readyz is an error, so it is not hidden among the health checks" do
+      [entry] = entries(fn -> stop(conn(:get, "/readyz", 503)) end)
+
+      assert %{"level" => "error", "route" => "/readyz", "status" => 503} = entry
+    end
+
     test "nothing is written for health checks when the level is info" do
       Logger.configure(level: :info)
 
