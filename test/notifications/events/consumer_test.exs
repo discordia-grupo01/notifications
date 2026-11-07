@@ -572,6 +572,64 @@ if rabbitmq_url && mongo_url do
       assert history_ids(me) == [message_id]
     end
 
+    test "an event that keeps failing is moved to the dead letter queue and does not block the next one",
+         ctx do
+      %{chan: chan, queue: queue, server: server, channel: channel, me: me, other: other} = ctx
+      dead_letter_queue = Notifications.Events.DeadLetter.queue_for(queue)
+
+      Mox.set_mox_global()
+      previous_repo = Application.get_env(:notifications, :unread_repo)
+      Application.put_env(:notifications, :unread_repo, Notifications.Unread.RepoMock)
+      Application.put_env(:notifications, :event_retry_delay_ms, 10)
+      Application.put_env(:notifications, :event_max_attempts, 3)
+
+      on_exit(fn ->
+        Application.put_env(:notifications, :unread_repo, previous_repo)
+        Application.delete_env(:notifications, :event_retry_delay_ms)
+        Application.delete_env(:notifications, :event_max_attempts)
+      end)
+
+      Mox.stub(Notifications.Unread.RepoMock, :get_clock, fn _key -> nil end)
+      Mox.stub(Notifications.Unread.RepoMock, :apply_clock, fn _, _, _, _ -> {:error, :boom} end)
+
+      publish(chan, "servers.channel_created", %{
+        "server_id" => server,
+        "channel_id" => channel,
+        "name" => "general",
+        "kind" => "text"
+      })
+
+      assert wait_until(fn -> dead_letter_count(chan, dead_letter_queue) == 1 end)
+
+      assert {:ok, payload, meta} = AMQP.Basic.get(chan, dead_letter_queue, no_ack: true)
+      assert Jason.decode!(payload)["channel_id"] == channel
+
+      headers = Map.new(meta.headers, fn {name, _type, value} -> {name, value} end)
+      assert headers["x-original-queue"] == queue
+      assert headers["x-original-routing-key"] == "servers.channel_created"
+      assert headers["x-failure-reason"] == "retries_exhausted"
+      assert headers["x-attempts"] == 3
+      assert message_count(chan, queue) == 0
+
+      Application.put_env(:notifications, :unread_repo, Notifications.Unread.Repo.Mongo)
+      direct = later(10)
+
+      publish(chan, "messaging.direct_message_created", %{
+        "conversation_id" => "conv-" <> me,
+        "message_id" => direct,
+        "author_id" => other,
+        "recipient_id" => me
+      })
+
+      assert wait_until(fn -> history_ids(me) == [direct] end)
+      AMQP.Queue.delete(chan, dead_letter_queue)
+    end
+
+    defp dead_letter_count(chan, queue) do
+      {:ok, %{message_count: count}} = AMQP.Queue.declare(chan, queue, durable: true)
+      count
+    end
+
     defp history_ids(user) do
       case Notifications.History.list(user) do
         {:ok, %{items: items}} -> Enum.map(items, & &1["message_id"])
