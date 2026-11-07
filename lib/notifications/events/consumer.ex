@@ -2,7 +2,7 @@ defmodule Notifications.Events.Consumer do
   use GenServer
   require Logger
 
-  alias Notifications.Events.{Audit, Backoff, Event, Lifecycle}
+  alias Notifications.Events.{Audit, Backoff, DeadLetter, Event, Lifecycle}
   alias Notifications.Log
 
   @exchange "discordia.events"
@@ -24,7 +24,9 @@ defmodule Notifications.Events.Consumer do
     url = Keyword.fetch!(opts, :url)
     queue = Keyword.get(opts, :queue, @default_queue)
     send(self(), :connect)
-    {:ok, %{url: url, queue: queue, backoff: Backoff.initial(), conn: nil, chan: nil}}
+
+    {:ok,
+     %{url: url, queue: queue, backoff: Backoff.initial(), conn: nil, chan: nil, attempts: %{}}}
   end
 
   @impl true
@@ -58,8 +60,8 @@ defmodule Notifications.Events.Consumer do
   def handle_info({:basic_cancel_ok, _meta}, state), do: {:noreply, state}
 
   def handle_info({:basic_deliver, payload, meta}, state) do
-    handle_delivery(payload, meta, state.chan)
-    {:noreply, state}
+    attempts = handle_delivery(payload, meta, state)
+    {:noreply, %{state | attempts: attempts}}
   end
 
   @impl true
@@ -75,21 +77,14 @@ defmodule Notifications.Events.Consumer do
 
   def terminate(_reason, _state), do: :ok
 
-  defp handle_delivery(payload, meta, chan) do
+  defp handle_delivery(payload, meta, state) do
     outcome =
       case Jason.decode(payload) do
         {:ok, decoded} -> handle_decoded(decoded, payload, meta)
         {:error, reason} -> handle_malformed(payload, meta, reason)
       end
 
-    finish(outcome, chan, meta)
-  end
-
-  defp finish(:ack, chan, meta), do: AMQP.Basic.ack(chan, meta.delivery_tag)
-
-  defp finish(:retry, chan, meta) do
-    Process.sleep(Application.get_env(:notifications, :event_retry_delay_ms, 1_000))
-    AMQP.Basic.nack(chan, meta.delivery_tag, requeue: true)
+    DeadLetter.finish(outcome, state, meta, payload)
   end
 
   defp handle_decoded(decoded, payload, meta) do
@@ -170,6 +165,7 @@ defmodule Notifications.Events.Consumer do
          {:ok, chan} <- AMQP.Channel.open(conn),
          :ok <- AMQP.Exchange.declare(chan, @exchange, :topic, durable: true),
          {:ok, _info} <- AMQP.Queue.declare(chan, queue, durable: true),
+         :ok <- DeadLetter.declare(chan, queue),
          :ok <- bind_routing_keys(chan, queue),
          {:ok, _consumer_tag} <- AMQP.Basic.consume(chan, queue) do
       {:ok, conn, chan}
