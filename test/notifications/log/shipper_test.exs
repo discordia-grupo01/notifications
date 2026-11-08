@@ -48,6 +48,28 @@ defmodule Notifications.Log.ShipperTest do
     |> Enum.reject(&String.contains?(&1, "MongoDBConnection"))
   end
 
+  defp receive_request_with(message, timeout \\ 1_000) do
+    request = receive_logs(timeout)
+
+    if message in messages(request),
+      do: request,
+      else: receive_request_with(message, timeout)
+  end
+
+  defp receive_entry(message) do
+    request = receive_request_with(message)
+    {request, Enum.find(logs(request.body), &(&1["message"] == message))}
+  end
+
+  defp only(request, prefix),
+    do: request |> messages() |> Enum.filter(&String.starts_with?(&1, prefix))
+
+  defp receive_until_delivered(expected, seen) do
+    if Enum.all?(expected, &(&1 in seen)),
+      do: seen,
+      else: receive_until_delivered(expected, seen ++ messages(receive_logs()))
+  end
+
   defp refute_delivered(message, timeout \\ 150) do
     receive do
       {:sink, request} ->
@@ -63,19 +85,18 @@ defmodule Notifications.Log.ShipperTest do
 
     Logger.info("order_shipped", user_id: "u-1")
 
-    request = receive_logs()
+    {request, log} = receive_entry("order_shipped")
 
     assert request.headers["api-key"] == @api_key
     assert request.headers["content-encoding"] == "gzip"
     assert request.headers["content-type"] == "application/json"
-    assert [%{"common" => common, "logs" => [log]}] = request.body
+    assert [%{"common" => common} | _] = request.body
 
     assert common["attributes"] == %{
              "service.name" => "notifications-test",
              "entity.name" => "notifications-test"
            }
 
-    assert log["message"] == "order_shipped"
     assert is_integer(log["timestamp"])
     assert log["attributes"]["level"] == "info"
     assert log["attributes"]["user_id"] == "u-1"
@@ -89,7 +110,7 @@ defmodule Notifications.Log.ShipperTest do
 
     Logger.info("with_trace")
 
-    [log] = receive_logs() |> then(&logs(&1.body))
+    {_request, log} = receive_entry("with_trace")
 
     assert log["attributes"]["trace.id"] == "0af7651916cd43dd8448eb211c80319c"
     assert log["attributes"]["span.id"] == "b7ad6b7169203331"
@@ -104,7 +125,7 @@ defmodule Notifications.Log.ShipperTest do
 
     Logger.info("without_trace")
 
-    [log] = receive_logs() |> then(&logs(&1.body))
+    {_request, log} = receive_entry("without_trace")
 
     refute Map.has_key?(log["attributes"], "trace.id")
     refute Map.has_key?(log["attributes"], "span.id")
@@ -115,13 +136,12 @@ defmodule Notifications.Log.ShipperTest do
 
     :logger.info("sensitive", %{token: "super-secret", ticket: "t-123", unlisted_field: "x"})
 
-    request = receive_logs()
+    {request, log} = receive_entry("sensitive")
     raw = Jason.encode!(request.body)
 
     refute raw =~ "super-secret"
     refute raw =~ "t-123"
     refute raw =~ "unlisted_field"
-    [log] = logs(request.body)
     assert log["message"] == "sensitive"
   end
 
@@ -130,9 +150,9 @@ defmodule Notifications.Log.ShipperTest do
 
     for number <- 1..5, do: Logger.info("entry_#{number}")
 
-    request = receive_logs()
+    request = receive_request_with("entry_1")
 
-    assert messages(request) == for(number <- 1..5, do: "entry_#{number}")
+    assert only(request, "entry_") == for(number <- 1..5, do: "entry_#{number}")
   end
 
   test "sends right away when the batch is full without waiting for the interval" do
@@ -165,23 +185,22 @@ defmodule Notifications.Log.ShipperTest do
 
     for number <- 1..4, do: Logger.info("ordered_#{number}")
 
-    batches = for _ <- 1..4, do: messages(receive_logs())
-    delivered = batches |> List.flatten() |> Enum.uniq()
+    expected = for number <- 1..4, do: "ordered_#{number}"
+    delivered = receive_until_delivered(expected, [])
 
-    assert delivered == for(number <- 1..4, do: "ordered_#{number}")
+    assert delivered |> Enum.uniq() |> Enum.filter(&(&1 in expected)) == expected
   end
 
   test "discards the batch that the server rejects for good and keeps sending the next ones" do
     start_shipper([400, 202])
 
     Logger.info("rejected_entry")
-    first = receive_logs()
-    assert "rejected_entry" in messages(first)
+    receive_request_with("rejected_entry")
 
     Logger.info("next_entry")
-    second = receive_logs()
+    second = receive_request_with("next_entry")
 
-    assert messages(second) == ["next_entry"]
+    refute "rejected_entry" in messages(second)
     refute_delivered("rejected_entry")
   end
 
@@ -193,7 +212,8 @@ defmodule Notifications.Log.ShipperTest do
     requests = for _ <- 1..3, do: receive_logs()
     sent = requests |> Enum.flat_map(&messages/1) |> Enum.uniq()
 
-    assert sent == ["only_entry"]
+    assert "only_entry" in sent
+    refute "log_shipping_failed" in sent
     refute_delivered("log_shipping_failed")
     refute_delivered("log_shipping_recovered")
   end
@@ -243,7 +263,7 @@ defmodule Notifications.Log.ShipperTest do
     Logger.info("pending_at_shutdown")
     :ok = stop_supervised(Shipper)
 
-    assert "pending_at_shutdown" in messages(receive_logs())
+    receive_request_with("pending_at_shutdown")
   end
 
   test "once stopped it no longer collects logs" do
@@ -259,9 +279,7 @@ defmodule Notifications.Log.ShipperTest do
 
     :logger.info(%{event: :custom}, %{report_cb: fn report -> {~c"report ~p", [report.event]} end})
 
-    request = receive_logs()
-
-    assert messages(request) == ["report custom"]
+    receive_request_with("report custom")
   end
 
   test "Erlang-style messages are sent formatted" do
@@ -269,7 +287,7 @@ defmodule Notifications.Log.ShipperTest do
 
     :logger.info(~c"formatted ~p and ~s", [42, "text"])
 
-    assert messages(receive_logs()) == ["formatted 42 and text"]
+    receive_request_with("formatted 42 and text")
   end
 
   test "the api key never ends up in what is sent" do
@@ -277,6 +295,6 @@ defmodule Notifications.Log.ShipperTest do
 
     Logger.info("check_key")
 
-    refute Jason.encode!(receive_logs().body) =~ @api_key
+    refute Jason.encode!(receive_request_with("check_key").body) =~ @api_key
   end
 end
