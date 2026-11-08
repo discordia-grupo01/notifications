@@ -483,6 +483,8 @@ Ver `.env.example`.
 | `PUSH_MAX_DEVICES` | dispositivos máximos por usuario (10) |
 | `PUSH_ALLOWED_HOSTS` | servicios de push web aceptados, como sufijos de host separados por comas |
 | `LOG_LEVEL` | `debug`, `info`, `warning` o `error` |
+| `LOG_SHIP_URL` | opcional: URL del Log API al que se envían los logs. En New Relic (cuenta de EE. UU.): `https://log-api.newrelic.com/log/v1`. Sin ella los logs solo salen por la salida estándar |
+| `LOG_SHIP_API_KEY` | opcional: clave de ingesta para `LOG_SHIP_URL`. Si no está, se toma la `api-key` de `OTEL_EXPORTER_OTLP_HEADERS` |
 
 ## Logs
 
@@ -543,9 +545,9 @@ docker compose up -d mongo rabbitmq
 mix phx.server
 ```
 
-## Trazas (OpenTelemetry)
+## Trazas y métricas (OpenTelemetry)
 
-El servicio manda trazas a cualquier backend que hable OTLP por HTTP (New Relic, Grafana Cloud, un colector propio). Está **apagado por defecto**: sin `OTEL_EXPORTER_OTLP_ENDPOINT` no se exporta nada y el servicio funciona igual.
+El servicio manda trazas y métricas a cualquier backend que hable OTLP por HTTP (New Relic, Grafana Cloud, un colector propio). Está **apagado por defecto**: sin `OTEL_EXPORTER_OTLP_ENDPOINT` no se exporta nada y el servicio funciona igual.
 
 | Variable | Para qué |
 |---|---|
@@ -555,8 +557,19 @@ El servicio manda trazas a cualquier backend que hable OTLP por HTTP (New Relic,
 
 - **Pedidos HTTP:** un span por pedido (`Notifications.Tracing`), llamado como el patrón de la ruta (`PUT /v1/notifications/settings/servers/:server_id`). Solo guarda `http.request.method`, `http.route` y `http.response.status_code`: nunca el path real, la query string, headers ni la IP. Si el pedido trae un `traceparent`, la traza continúa desde ahí.
 - **Eventos de RabbitMQ:** el consumidor de `notifications.unread_state` abre un span `<routing key> process` dentro de la traza que llega en la cabecera `traceparent` del mensaje; si el evento va a reintento, el span queda marcado como error. Si el mensaje no la trae, empieza una traza nueva.
+- **Métricas HTTP:** el histograma `http.server.request.duration` (en segundos, temporalidad delta, exportado cada 60 s) lo registra `Notifications.Metrics` al terminar cada pedido, con `http.request.method`, `http.route` y `http.response.status_code`; si el estado es 5xx suma `error.type`. De ahí salen el throughput, la latencia y la tasa de errores del resumen de APM en New Relic. Los pedidos a rutas inexistentes se agrupan en la ruta `unmatched`.
 - **Logs:** las líneas escritas mientras corre un pedido o un evento llevan `trace_id` y `span_id`.
 - **Todavía sin instrumentar:** las consultas a Mongo, los canales de WebSocket y los envíos a Expo y a Web Push.
+
+## Envío de logs (New Relic)
+
+Además de la salida estándar, el servicio puede enviar sus logs al Log API de New Relic. Está **apagado por defecto**: solo se activa si hay `LOG_SHIP_URL` y una clave (`LOG_SHIP_API_KEY` o la `api-key` de `OTEL_EXPORTER_OTLP_HEADERS`).
+
+- **Qué se envía:** las mismas entradas que salen por la salida estándar, con el mismo filtrado de datos sensibles (`token`, `ticket`, `content`, etc.) y solo los campos de metadata permitidos. `trace_id` y `span_id` viajan como `trace.id` y `span.id`, que es como New Relic enlaza cada log con su traza. El servicio se identifica con `service.name` (el valor de `OTEL_SERVICE_NAME`).
+- **Cómo se envía:** `Notifications.Log.Shipper` junta las entradas en lotes de hasta 200 o cada 5 segundos, las comprime en gzip y las manda por HTTPS. Los pedidos no esperan al envío.
+- **Si el backend falla:** reintenta con espera creciente (de 1 s hasta 60 s) ante errores de red, 408, 429 y 5xx; un lote rechazado de forma definitiva (por ejemplo 400 o 403) se descarta. La cola está acotada a 5.000 entradas: si se llena descarta las más viejas, para no crecer sin límite en memoria.
+- **Sin bucles:** los avisos del propio envío (`log_shipping_failed`, `log_shipping_recovered`, `log_batch_discarded`, `log_entries_dropped`) salen por la salida estándar pero nunca se reenvían.
+- **Al apagar:** intenta enviar lo que quedó pendiente durante unos 3 segundos.
 
 ## Tests
 ```bash
