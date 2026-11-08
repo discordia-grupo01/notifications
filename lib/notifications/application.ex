@@ -10,24 +10,35 @@ defmodule Notifications.Application do
     Notifications.Tracing.attach()
     Notifications.Metrics.setup()
 
-    Logger.info("service_started",
-      version: to_string(Application.spec(:notifications, :vsn)),
-      log_level: Logger.level()
-    )
-
     children =
-      [
-        {Phoenix.PubSub, name: Notifications.PubSub},
-        Notifications.Delivery.Dispatcher,
-        {Mongo,
-         Notifications.MongoOptions.build(
-           mongo_url,
-           Application.fetch_env!(:notifications, :mongo_pool_size)
-         )}
-      ] ++ index_children() ++ amqp_children() ++ [NotificationsWeb.Endpoint]
+      log_shipper_children() ++
+        [
+          {Phoenix.PubSub, name: Notifications.PubSub},
+          Notifications.Delivery.Dispatcher,
+          {Mongo,
+           Notifications.MongoOptions.build(
+             mongo_url,
+             Application.fetch_env!(:notifications, :mongo_pool_size)
+           )}
+        ] ++ index_children() ++ amqp_children() ++ [NotificationsWeb.Endpoint]
 
     opts = [strategy: :one_for_one, name: Notifications.Supervisor]
-    Supervisor.start_link(children, opts)
+
+    with {:ok, supervisor} <- Supervisor.start_link(children, opts) do
+      Logger.info("service_started",
+        version: to_string(Application.spec(:notifications, :vsn)),
+        log_level: Logger.level()
+      )
+
+      {:ok, supervisor}
+    end
+  end
+
+  defp log_shipper_children do
+    case Application.get_env(:notifications, :log_shipper) do
+      nil -> []
+      options -> [{Notifications.Log.Shipper, options}]
+    end
   end
 
   defp index_children do
