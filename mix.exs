@@ -45,6 +45,8 @@ defmodule Notifications.MixProject do
       {:opentelemetry_api, "~> 1.4"},
       {:opentelemetry, "~> 1.5"},
       {:opentelemetry_exporter, "~> 1.8"},
+      {:opentelemetry_api_experimental, "~> 0.6"},
+      {:opentelemetry_experimental, "~> 0.6"},
       {:ymlr, "~> 5.0", only: :dev, runtime: false},
       {:excoveralls, "~> 0.18", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
