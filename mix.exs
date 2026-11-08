@@ -9,6 +9,7 @@ defmodule Notifications.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
+      releases: releases(),
       dialyzer: [plt_add_apps: [:mix]],
       test_coverage: [tool: ExCoveralls]
     ]
@@ -18,6 +19,14 @@ defmodule Notifications.MixProject do
     [
       mod: {Notifications.Application, []},
       extra_applications: [:logger, :runtime_tools, :inets, :ssl]
+    ]
+  end
+
+  defp releases do
+    [
+      notifications: [
+        applications: [opentelemetry_exporter: :permanent, opentelemetry: :temporary]
+      ]
     ]
   end
 
@@ -33,6 +42,9 @@ defmodule Notifications.MixProject do
       {:mongodb_driver, "~> 1.4"},
       {:amqp, "~> 3.3"},
       {:open_api_spex, "~> 3.21"},
+      {:opentelemetry_api, "~> 1.4"},
+      {:opentelemetry, "~> 1.5"},
+      {:opentelemetry_exporter, "~> 1.8"},
       {:ymlr, "~> 5.0", only: :dev, runtime: false},
       {:excoveralls, "~> 0.18", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
