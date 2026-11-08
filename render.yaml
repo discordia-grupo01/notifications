@@ -22,4 +22,4 @@ services:
       - key: LOG_LEVEL
         value: info
       - key: CHECK_ORIGIN
-        value: https://discordia-g1.vercel.app,https://discordia-g1.duckdns.org
+        value: https://discordia-g1.vercel.app,https://backoffice-g1.vercel.app,https://discordia-g1.duckdns.org
