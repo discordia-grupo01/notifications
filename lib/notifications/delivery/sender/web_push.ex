@@ -2,6 +2,7 @@ defmodule Notifications.Delivery.Sender.WebPush do
   @behaviour Notifications.Delivery.Sender
 
   alias Notifications.Delivery.{Config, Http}
+  alias Notifications.Delivery.Sender.HttpStatus
   alias Notifications.Delivery.WebPush.{Encryption, Vapid}
 
   @ttl_seconds 24 * 60 * 60
@@ -68,6 +69,8 @@ defmodule Notifications.Delivery.Sender.WebPush do
   defp classify({:ok, %{status: status} = response}) when status >= 500,
     do: {:error, {:retry, :server_error, Http.retry_after_ms(response)}}
 
-  defp classify({:ok, %{status: status}}), do: {:error, {:failed, :"http_#{status}"}}
+  defp classify({:ok, %{status: status}}),
+    do: {:error, {:failed, HttpStatus.reason(status)}}
+
   defp classify({:error, reason}), do: {:error, {:retry, reason, nil}}
 end

@@ -642,6 +642,15 @@ El controller/channel (capa web) **nunca** accede directo a Mongo: siempre entra
 make ci
 ```
 
+`make ci` incluye el análisis estático de seguridad con [Sobelow](https://github.com/nccgroup/sobelow)
+(`mix sobelow --config`, configurado en `.sobelow-conf`). Falla ante cualquier hallazgo, y el
+mismo paso corre en el pipeline de GitHub, que bloquea el merge a `main`.
+
+Se ignoran dos reglas, a propósito:
+- `Config.HTTPS`: el TLS lo termina Render, delante de la aplicación.
+- `Config.CSWH`: el `check_origin` del WebSocket se configura en `config/runtime.exs` con la lista
+  de orígenes permitidos (`CHECK_ORIGIN`), no en la definición del socket.
+
 ## Pendiente / fuera de alcance
 - Los eventos de suspensión de usuarios no se consumen (no cambian el estado de lectura).
 - Los mensajes directos no encienden indicadores de no leído acá (eso lo lleva `messaging`); en

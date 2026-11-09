@@ -2,6 +2,7 @@ defmodule Notifications.Delivery.Sender.Expo do
   @behaviour Notifications.Delivery.Sender
 
   alias Notifications.Delivery.{Config, Http}
+  alias Notifications.Delivery.Sender.HttpStatus
 
   @incoming_call_category "private_call_incoming"
   @incoming_call_channel "private_calls"
@@ -62,7 +63,9 @@ defmodule Notifications.Delivery.Sender.Expo do
   defp classify({:ok, %{status: status} = response}) when status >= 500,
     do: {:error, {:retry, :server_error, Http.retry_after_ms(response)}}
 
-  defp classify({:ok, %{status: status}}), do: {:error, {:failed, :"http_#{status}"}}
+  defp classify({:ok, %{status: status}}),
+    do: {:error, {:failed, HttpStatus.reason(status)}}
+
   defp classify({:error, reason}), do: {:error, {:retry, reason, nil}}
 
   defp ticket(body) do
