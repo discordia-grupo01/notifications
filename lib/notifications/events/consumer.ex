@@ -2,7 +2,7 @@ defmodule Notifications.Events.Consumer do
   use GenServer
   require Logger
 
-  alias Notifications.Events.{Audit, Backoff, DeadLetter, Event, Lifecycle}
+  alias Notifications.Events.{Audit, Backoff, Contract, DeadLetter, Event, Lifecycle}
   alias Notifications.Log
   alias Notifications.Tracing
 
@@ -92,6 +92,8 @@ defmodule Notifications.Events.Consumer do
   end
 
   defp handle_decoded(decoded, payload, meta) do
+    Contract.check(meta.routing_key, decoded)
+
     case Event.parse(meta.routing_key, decoded) do
       {:ok, event} ->
         case Lifecycle.handle(event) do
