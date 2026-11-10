@@ -6,6 +6,7 @@ config :notifications, NotificationsWeb.Endpoint,
   server: false,
   debug_errors: false
 
+config :notifications, :event_contract_check, :off
 config :notifications, :start_amqp_consumers, false
 config :notifications, :ensure_indexes, false
 config :notifications, :unread_repo, Notifications.Unread.RepoMock
