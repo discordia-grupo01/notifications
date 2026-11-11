@@ -5,6 +5,7 @@ defmodule Notifications.Events.Lifecycle do
   alias Notifications.Events.Event
   alias Notifications.History
   alias Notifications.Push
+  alias Notifications.Realtime
   alias Notifications.Unread.{Position, Repo}
 
   @tombstone_ttl_seconds 7 * 24 * 60 * 60
@@ -12,7 +13,20 @@ defmodule Notifications.Events.Lifecycle do
   @type result :: :ok | {:ignored, :stale | :server_deleted | :channel_deleted} | {:error, term()}
 
   @spec handle(struct()) :: result()
-  def handle(%Event.ChannelCreated{} = event) do
+  def handle(event) do
+    Realtime.before_event(event)
+
+    case do_handle(event) do
+      :ok ->
+        Realtime.after_event(event)
+        :ok
+
+      other ->
+        other
+    end
+  end
+
+  defp do_handle(%Event.ChannelCreated{} = event) do
     with :alive <- server_state(event.server_id),
          {:ok, :applied} <- clock(channel_key(event.channel_id), "created", event.occurred_at),
          :ok <-
@@ -29,7 +43,7 @@ defmodule Notifications.Events.Lifecycle do
     end
   end
 
-  def handle(%Event.ChannelDeleted{} = event) do
+  defp do_handle(%Event.ChannelDeleted{} = event) do
     with {:ok, :applied} <-
            clock(channel_key(event.channel_id), "deleted", event.occurred_at, tombstone_expiry()),
          :ok <- repo().delete_channel(event.channel_id),
@@ -40,7 +54,7 @@ defmodule Notifications.Events.Lifecycle do
     end
   end
 
-  def handle(%Event.ServerDeleted{} = event) do
+  defp do_handle(%Event.ServerDeleted{} = event) do
     with {:ok, :applied} <-
            clock(server_key(event.server_id), "deleted", event.occurred_at, tombstone_expiry()),
          :ok <- repo().delete_server_data(event.server_id, event.channel_ids),
@@ -51,7 +65,7 @@ defmodule Notifications.Events.Lifecycle do
     end
   end
 
-  def handle(%Event.MemberJoined{} = event) do
+  defp do_handle(%Event.MemberJoined{} = event) do
     with {:ok, :applied} <- clock(member_key(event), "joined", event.occurred_at),
          :ok <- repo().record_member_joined(event.server_id, event.user_id, event.occurred_at),
          :ok <- resync_user(event.user_id) do
@@ -61,7 +75,7 @@ defmodule Notifications.Events.Lifecycle do
     end
   end
 
-  def handle(%Event.MemberLeft{} = event) do
+  defp do_handle(%Event.MemberLeft{} = event) do
     with {:ok, :applied} <- clock(member_key(event), "left", event.occurred_at),
          {:ok, _outcome} <-
            repo().delete_member(event.server_id, event.user_id, event.occurred_at),
@@ -72,7 +86,7 @@ defmodule Notifications.Events.Lifecycle do
     end
   end
 
-  def handle(%Event.RoleUpdated{} = event) do
+  defp do_handle(%Event.RoleUpdated{} = event) do
     replica_write(event.server_id, "servers.role_updated", &resync_server/1, fn ->
       repo().apply_role(
         event.server_id,
@@ -84,13 +98,13 @@ defmodule Notifications.Events.Lifecycle do
     end)
   end
 
-  def handle(%Event.RoleDeleted{} = event) do
+  defp do_handle(%Event.RoleDeleted{} = event) do
     replica_write(event.server_id, "servers.role_deleted", &resync_server/1, fn ->
       repo().delete_role(event.server_id, event.role_id, event.occurred_at)
     end)
   end
 
-  def handle(%Event.MemberRolesUpdated{} = event) do
+  defp do_handle(%Event.MemberRolesUpdated{} = event) do
     replica_write(
       event.server_id,
       "servers.member_roles_updated",
@@ -106,7 +120,7 @@ defmodule Notifications.Events.Lifecycle do
     )
   end
 
-  def handle(%Event.ChannelOverridesUpdated{} = event) do
+  defp do_handle(%Event.ChannelOverridesUpdated{} = event) do
     replica_write(event.server_id, "servers.channel_overrides_updated", &resync_server/1, fn ->
       repo().apply_channel_overrides(
         event.server_id,
@@ -117,13 +131,13 @@ defmodule Notifications.Events.Lifecycle do
     end)
   end
 
-  def handle(%Event.OwnerUpdated{} = event) do
+  defp do_handle(%Event.OwnerUpdated{} = event) do
     replica_write(event.server_id, "servers.owner_updated", &resync_server/1, fn ->
       repo().apply_server_owner(event.server_id, event.owner_id, event.occurred_at)
     end)
   end
 
-  def handle(%Event.MessageCreated{} = event) do
+  defp do_handle(%Event.MessageCreated{} = event) do
     position = Position.of(event.occurred_at, event.message_id)
 
     with :alive <- server_state(event.server_id),
@@ -157,7 +171,7 @@ defmodule Notifications.Events.Lifecycle do
     end
   end
 
-  def handle(%Event.MessageUpdated{} = event) do
+  defp do_handle(%Event.MessageUpdated{} = event) do
     with :alive <- server_state(event.server_id),
          :alive <- channel_state(event.channel_id),
          {:ok, added} <- History.sync_mentions(event),
@@ -168,7 +182,7 @@ defmodule Notifications.Events.Lifecycle do
     end
   end
 
-  def handle(%Event.MessageDeleted{} = event) do
+  defp do_handle(%Event.MessageDeleted{} = event) do
     with :ok <- History.forget(event.message_id) do
       Logger.debug("message_delete_applied", message_id: event.message_id)
     else
@@ -176,7 +190,7 @@ defmodule Notifications.Events.Lifecycle do
     end
   end
 
-  def handle(%Event.DirectMessageCreated{} = event) do
+  defp do_handle(%Event.DirectMessageCreated{} = event) do
     with :ok <- History.record_direct(event),
          :ok <- Delivery.notify(event) do
       Logger.debug("direct_message_recorded",
@@ -188,7 +202,7 @@ defmodule Notifications.Events.Lifecycle do
     end
   end
 
-  def handle(%Event.OwnershipTransferUpdated{} = event) do
+  defp do_handle(%Event.OwnershipTransferUpdated{} = event) do
     with :alive <- server_state(event.server_id),
          {:ok, :applied} <-
            clock(
@@ -208,15 +222,17 @@ defmodule Notifications.Events.Lifecycle do
     end
   end
 
-  def handle(%Event.PrivateCall{} = event) do
+  defp do_handle(%Event.Ping{}), do: :ok
+
+  defp do_handle(%Event.PrivateCall{} = event) do
     Delivery.notify(event)
   end
 
-  def handle(%Event.PlatformStatusChanged{} = event) do
+  defp do_handle(%Event.PlatformStatusChanged{} = event) do
     Push.publish("platform", "status_changed", %{"refetch" => true, "status" => event.status})
   end
 
-  def handle(%Event.PlatformHealthChanged{} = event) do
+  defp do_handle(%Event.PlatformHealthChanged{} = event) do
     Enum.reduce_while(event.audience_user_ids, :ok, fn user_id, :ok ->
       case Push.publish("user:" <> user_id, "health_check_changed", %{
              "service" => event.service,
@@ -230,7 +246,7 @@ defmodule Notifications.Events.Lifecycle do
     end)
   end
 
-  def handle(%Event.UserProfileUpdated{} = event) do
+  defp do_handle(%Event.UserProfileUpdated{} = event) do
     with {:ok, :applied} <-
            delivery_repo().apply_user_name(event.user_id, event.name, event.version) do
       Logger.debug("user_name_applied", user_id: event.user_id)
@@ -239,7 +255,7 @@ defmodule Notifications.Events.Lifecycle do
     end
   end
 
-  def handle(%Event.ServerUpdated{} = event) do
+  defp do_handle(%Event.ServerUpdated{} = event) do
     with {:ok, :applied} <-
            delivery_repo().apply_server_name(event.server_id, event.name, event.occurred_at) do
       Logger.debug("server_name_applied", server_id: event.server_id)
@@ -248,7 +264,7 @@ defmodule Notifications.Events.Lifecycle do
     end
   end
 
-  def handle(%Event.UserPresenceChanged{} = event) do
+  defp do_handle(%Event.UserPresenceChanged{} = event) do
     expires_at = DateTime.add(DateTime.utc_now(), presence_ttl_seconds(), :second)
 
     with {:ok, :applied} <-

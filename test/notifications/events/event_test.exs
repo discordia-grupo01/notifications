@@ -17,7 +17,12 @@ defmodule Notifications.Events.EventTest do
                messaging.message_created messaging.direct_message_created
                messaging.message_updated messaging.message_deleted
                users.profile_updated servers.server_updated messaging.user_presence_changed
-               servers.ownership_transfer_updated
+               servers.ownership_transfer_updated servers.member_banned servers.member_unbanned
+               servers.member_kicked servers.member_muted servers.member_unmuted
+               servers.word_filter_updated servers.moderation_action_recorded servers.report_updated
+               servers.emoji_created servers.emoji_deleted servers.server_boost_updated
+               servers.resource_changed billing.account_changed billing.premium_updated
+               admin.backoffice_changed
                voice.private_call platform.status_changed platform.health_changed
              ))
   end
@@ -478,6 +483,58 @@ defmodule Notifications.Events.EventTest do
           ] do
         assert Event.parse("servers.ownership_transfer_updated", broken) ==
                  {:error, :invalid_payload}
+      end
+    end
+  end
+
+  describe "events that only tell the clients what to ask for again" do
+    test "a moderation event keeps the server and the user" do
+      payload = base(%{"server_id" => "s1", "user_id" => "u1", "banned_by" => "mod"})
+
+      assert {:ok, %Event.Ping{routing_key: "servers.member_banned", fields: fields}} =
+               Event.parse("servers.member_banned", payload)
+
+      assert fields == %{server_id: "s1", user_id: "u1"}
+    end
+
+    test "servers.resource_changed keeps what to ask for again" do
+      payload = base(%{"server_id" => "s1", "resource" => "channels"})
+
+      assert {:ok, %Event.Ping{fields: %{server_id: "s1", resource: "channels"}}} =
+               Event.parse("servers.resource_changed", payload)
+    end
+
+    test "billing.account_changed names the user and the resource" do
+      payload = base(%{"user_id" => "u1", "resource" => "points"})
+
+      assert {:ok, %Event.Ping{fields: %{user_id: "u1", resource: "points"}}} =
+               Event.parse("billing.account_changed", payload)
+    end
+
+    test "billing.premium_updated is only read for who it is about" do
+      payload = base(%{"user_id" => "u1", "active" => true, "signature" => "x"})
+
+      assert {:ok, %Event.Ping{fields: %{user_id: "u1"}}} =
+               Event.parse("billing.premium_updated", payload)
+    end
+
+    test "admin.backoffice_changed keeps the staff to tell" do
+      payload = base(%{"resource" => "users", "audience_user_ids" => ["a", "b", "a"]})
+
+      assert {:ok, %Event.Ping{fields: %{resource: "users", audience_user_ids: ["a", "b"]}}} =
+               Event.parse("admin.backoffice_changed", payload)
+    end
+
+    test "they are rejected when something is missing or the resource is unknown" do
+      for {key, broken} <- [
+            {"servers.member_banned", base(%{"server_id" => "s1"})},
+            {"servers.resource_changed", base(%{"resource" => "channels"})},
+            {"billing.account_changed", Map.delete(base(%{"user_id" => "u1"}), "resource")},
+            {"admin.backoffice_changed",
+             base(%{"resource" => "cosas", "audience_user_ids" => []})},
+            {"admin.backoffice_changed", base(%{"resource" => "users"})}
+          ] do
+        assert Event.parse(key, broken) == {:error, :invalid_payload}
       end
     end
   end
