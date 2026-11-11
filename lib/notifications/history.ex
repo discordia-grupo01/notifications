@@ -47,6 +47,12 @@ defmodule Notifications.History do
     ])
   end
 
+  @spec record_transfer(map()) :: :ok | {:error, term()}
+  def record_transfer(event) do
+    [receiver_item(event) | sender_items(event)]
+    |> Repo.impl().upsert_history()
+  end
+
   @spec sync_mentions(map()) :: {:ok, [String.t()]} | {:error, term()}
   def sync_mentions(%{message_id: message_id, author_id: author_id} = event) do
     mentioned = event.mentioned_user_ids |> Enum.reject(&(&1 == author_id)) |> Enum.uniq()
@@ -99,6 +105,31 @@ defmodule Notifications.History do
     user_id
     |> base_item("mention", event)
     |> Map.merge(%{"server_id" => event.server_id, "channel_id" => event.channel_id})
+  end
+
+  defp receiver_item(event) do
+    transfer_item(event.to_user_id, event, event.created_at)
+  end
+
+  defp sender_items(%{status: status} = event) when status in ~w(accepted rejected expired) do
+    [transfer_item(event.from_user_id, event, event.resolved_at || event.occurred_at)]
+  end
+
+  defp sender_items(_event), do: []
+
+  defp transfer_item(user_id, event, occurred_at) do
+    %{
+      "_id" => user_id <> ":" <> event.transfer_id,
+      "user_id" => user_id,
+      "kind" => "ownership_transfer",
+      "message_id" => event.transfer_id,
+      "author_id" => event.from_user_id,
+      "to_user_id" => event.to_user_id,
+      "server_id" => event.server_id,
+      "transfer_status" => event.status,
+      "occurred_at" => occurred_at
+    }
+    |> put_expiry(occurred_at)
   end
 
   defp base_item(user_id, kind, event) do
@@ -161,7 +192,18 @@ defmodule Notifications.History do
 
   def decode_cursor(_other), do: :error
 
-  defp render(doc) do
+  defp render(%{"kind" => "ownership_transfer"} = doc) do
+    doc
+    |> render_message()
+    |> Map.merge(%{
+      "to_user_id" => doc["to_user_id"],
+      "transfer_status" => doc["transfer_status"]
+    })
+  end
+
+  defp render(doc), do: render_message(doc)
+
+  defp render_message(doc) do
     %{
       "kind" => doc["kind"],
       "message_id" => doc["message_id"],

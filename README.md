@@ -292,10 +292,28 @@ El autor nunca recibe el suyo, y silenciar siempre gana. Además se descartan:
 título `Nombre`, cuerpo `mensaje`. El texto llega cortado (unos 140 caracteres) en el
 propio evento y **no se guarda**; los nombres salen de réplicas alimentadas por
 `users.profile_updated` y `servers.server_updated` (si faltan, "Usuario" y "Servidor"). El payload
-incluye ids para abrir el lugar correcto: `kind` (`mention`, `message` o `direct_message`),
+incluye ids para abrir el lugar correcto: `kind` (`mention`, `message`, `direct_message` u `ownership_transfer`),
 `message_id`, `author_id` y `server_id` + `channel_id` o `conversation_id`. En Expo, una llamada
 que está sonando va con `categoryId: private_call_incoming`, que la app registra con los botones
 Aceptar y Rechazar.
+
+**Transferencia de propiedad.** `servers` publica `servers.ownership_transfer_updated` en cada
+cambio de estado (foto completa: `transfer_id`, `server_id`, `from_user_id`, `to_user_id`, `status`,
+`created_at`, `resolved_at`). Se aplica con la regla de `occurred_at` (una foto vieja o repetida
+no pisa a una nueva; el reloj `transfer:<id>` dura 7 días) y deja entradas `ownership_transfer` en el
+historial:
+
+| `status` | Entrada en el historial | Push |
+|---|---|---|
+| `pending` | del receptor (`occurred_at` = creación) | al receptor: "Ana quiere transferirte la propiedad de Mi Server" |
+| `accepted`, `rejected` | se actualiza la del receptor y aparece una para el dueño anterior | al dueño anterior: "Beto aceptó/rechazó ser el nuevo dueño de Mi Server" |
+| `expired` | igual que arriba | al dueño anterior: "La transferencia de Mi Server venció sin respuesta" |
+| `cancelled` | se actualiza la del receptor (queda cerrada) | ninguno |
+
+El push no sigue los ajustes por canal ni por servidor (no es un mensaje): solo el interruptor
+general y la regla de presencia. `message_id` de esa entrada es el id de la transferencia, y
+`to_user_id` dice a quién se ofreció (si es quien consulta, es un ofrecimiento hecho a él; si no,
+es la respuesta a su ofrecimiento).
 
 **Dispositivos** (el token viaja solo en el cuerpo, nunca en la URL ni en los logs):
 
@@ -398,6 +416,7 @@ Una única cola durable, `notifications.unread_state`, enlazada a `discordia.eve
 | `messaging.direct_message_created` | historial del destinatario del mensaje directo (no se audita: es de alto volumen) |
 | `messaging.message_updated` | edición de un mensaje de canal: agrega la entrada de quien quedó mencionado (y le manda un push "editado") y quita la de quien dejó de estarlo (no se audita: lleva texto) |
 | `messaging.message_deleted` | borra de todos los historiales las entradas que apuntan al mensaje |
+| `servers.ownership_transfer_updated` | cada cambio de estado de una transferencia de propiedad: deja una entrada en el historial y manda un push (ver "Transferencia de propiedad") |
 | `messaging.user_presence_changed` | réplica de si el usuario tiene la app abierta, para decidir el push (no se audita) |
 | `users.profile_updated` | nombre del autor para el texto del push (solo `user_id`, `name` y `version`; no se audita) |
 | `servers.server_updated` | nombre del servidor para el título del push |
@@ -449,7 +468,7 @@ Mongo ante un `resync`.
 | `event_clocks` | relojes LWW y lápidas |
 | `consumed_events` | auditoría de lo consumido |
 | `notification_settings` | `_id` = `user:canal_o_servidor`, `scope` (`server`/`channel`), `scope_id`, `server_id`, `muted`, `level` (`all`/`mentions`/`none` o `null`) |
-| `notification_history` | `_id` = `user:mensaje`, `user_id`, `kind` (`mention`/`direct_message`), `message_id`, `author_id`, `occurred_at`, `server_id`/`channel_id` o `conversation_id`, `expires_at` (TTL) |
+| `notification_history` | `_id` = `user:mensaje`, `user_id`, `kind` (`mention`/`direct_message`/`ownership_transfer`), `message_id` (en `ownership_transfer`, el id de la transferencia), `author_id`, `occurred_at`, `server_id`/`channel_id` o `conversation_id` (en `ownership_transfer`, también `to_user_id` y `transfer_status`), `expires_at` (TTL) |
 | `socket_tickets` | tickets de un solo uso (TTL) |
 | `replica_user_names`, `replica_server_names` | nombre por `user_id` (última `version`) y por `server_id` (último `occurred_at`) |
 | `replica_presence` | `_id` = usuario, `connections` (`active`/`idle`/`none`), `do_not_disturb`, `version`, `expires_at` (TTL) |

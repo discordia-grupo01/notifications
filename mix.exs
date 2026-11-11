@@ -41,7 +41,7 @@ defmodule Notifications.MixProject do
       {:cowlib, "~> 2.19.0", override: true},
       {:mongodb_driver, "~> 1.4"},
       {:amqp, "~> 3.3"},
-      {:events_contract, github: "discordia-grupo01/events-contract", tag: "v0.17.0"},
+      {:events_contract, github: "discordia-grupo01/events-contract", tag: "v0.18.0"},
       {:open_api_spex, "~> 3.21"},
       {:opentelemetry_api, "~> 1.4"},
       {:opentelemetry, "~> 1.5"},

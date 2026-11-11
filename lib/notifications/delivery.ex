@@ -45,6 +45,12 @@ defmodule Notifications.Delivery do
     end
   end
 
+  defp run(%Event.OwnershipTransferUpdated{} = event) do
+    with {:ok, recipients} <- Recipients.for_ownership_transfer(event) do
+      deliver(event, recipients)
+    end
+  end
+
   defp run(%Event.PrivateCall{} = event) do
     with {:ok, recipients} <- Recipients.for_private_call(event) do
       deliver(event, recipients)
@@ -81,4 +87,5 @@ defmodule Notifications.Delivery do
   defp kind_name(:message), do: "message"
   defp kind_name(:direct), do: "direct_message"
   defp kind_name(:call), do: "voice_call"
+  defp kind_name(:transfer), do: "ownership_transfer"
 end

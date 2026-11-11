@@ -17,6 +17,7 @@ defmodule Notifications.Events.EventTest do
                messaging.message_created messaging.direct_message_created
                messaging.message_updated messaging.message_deleted
                users.profile_updated servers.server_updated messaging.user_presence_changed
+               servers.ownership_transfer_updated
                voice.private_call platform.status_changed platform.health_changed
              ))
   end
@@ -418,6 +419,66 @@ defmodule Notifications.Events.EventTest do
 
       assert Event.parse("servers.channel_overrides_updated", payload) ==
                {:error, :invalid_payload}
+    end
+  end
+
+  describe "servers.ownership_transfer_updated" do
+    defp transfer_payload(extra \\ %{}) do
+      base(
+        Map.merge(
+          %{
+            "transfer_id" => "t1",
+            "server_id" => "s1",
+            "from_user_id" => "owner",
+            "to_user_id" => "member",
+            "status" => "pending",
+            "created_at" => "2026-10-23T11:00:00.000000Z"
+          },
+          extra
+        )
+      )
+    end
+
+    test "parses a pending transfer" do
+      assert {:ok, %Event.OwnershipTransferUpdated{} = event} =
+               Event.parse("servers.ownership_transfer_updated", transfer_payload())
+
+      assert event.transfer_id == "t1"
+      assert event.from_user_id == "owner"
+      assert event.to_user_id == "member"
+      assert event.status == "pending"
+      assert event.created_at == ~U[2026-10-23 11:00:00.000000Z]
+      assert event.resolved_at == nil
+    end
+
+    test "parses a resolved transfer with its resolution time" do
+      payload = transfer_payload(%{"status" => "accepted", "resolved_at" => @at})
+
+      assert {:ok, event} = Event.parse("servers.ownership_transfer_updated", payload)
+      assert event.status == "accepted"
+      assert event.resolved_at == ~U[2026-10-23 12:00:00.000000Z]
+    end
+
+    test "accepts every state the contract lists" do
+      for status <- ~w(pending accepted rejected cancelled expired) do
+        assert {:ok, _event} =
+                 Event.parse(
+                   "servers.ownership_transfer_updated",
+                   transfer_payload(%{"status" => status})
+                 )
+      end
+    end
+
+    test "rejects an unknown state, a missing id or a broken time" do
+      for broken <- [
+            transfer_payload(%{"status" => "archived"}),
+            Map.delete(transfer_payload(), "to_user_id"),
+            transfer_payload(%{"created_at" => "ayer"}),
+            transfer_payload(%{"resolved_at" => "mañana"})
+          ] do
+        assert Event.parse("servers.ownership_transfer_updated", broken) ==
+                 {:error, :invalid_payload}
+      end
     end
   end
 end
