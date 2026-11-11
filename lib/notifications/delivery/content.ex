@@ -30,6 +30,23 @@ defmodule Notifications.Delivery.Content do
     end
   end
 
+  def build(%Event.OwnershipTransferUpdated{} = event) do
+    with {:ok, server} <- server_name(event.server_id),
+         {:ok, owner} <- user_name(event.from_user_id),
+         {:ok, receiver} <- user_name(event.to_user_id) do
+      {:ok,
+       %{
+         title: "Transferencia de propiedad",
+         body: transfer_body(event.status, server, owner, receiver),
+         data: %{
+           "transfer_id" => event.transfer_id,
+           "server_id" => event.server_id,
+           "status" => event.status
+         }
+       }}
+    end
+  end
+
   def build(%{conversation_id: conversation_id} = event) do
     with {:ok, author, preview} <- author_and_preview(event) do
       {:ok,
@@ -57,6 +74,21 @@ defmodule Notifications.Delivery.Content do
   end
 
   def build(%{server_id: _server_id, channel_id: _channel_id} = event), do: build_channel(event)
+
+  defp transfer_body("pending", server, owner, _receiver),
+    do: "#{owner} quiere transferirte la propiedad de #{server}"
+
+  defp transfer_body("accepted", server, _owner, receiver),
+    do: "#{receiver} aceptó ser el nuevo dueño de #{server}"
+
+  defp transfer_body("rejected", server, _owner, receiver),
+    do: "#{receiver} rechazó ser el nuevo dueño de #{server}"
+
+  defp transfer_body("expired", server, _owner, _receiver),
+    do: "La transferencia de #{server} venció sin respuesta"
+
+  defp transfer_body(_status, server, _owner, _receiver),
+    do: "Actualización de la transferencia de #{server}"
 
   defp call_body(caller, "ringing"), do: "#{caller} te está llamando"
   defp call_body(_caller, "missed"), do: "La llamada de voz no fue respondida"

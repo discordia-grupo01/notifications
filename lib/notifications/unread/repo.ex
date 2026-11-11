@@ -79,6 +79,7 @@ defmodule Notifications.Unread.Repo do
   @callback delete_history_entries(message_id :: String.t(), user_ids :: [String.t()] | :all) ::
               result()
   @callback put_history(items :: [map()]) :: result()
+  @callback upsert_history(items :: [map()]) :: result()
   @callback list_history(
               user_id :: String.t(),
               before :: {DateTime.t(), String.t()} | nil,

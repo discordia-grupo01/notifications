@@ -2,7 +2,17 @@ defmodule Notifications.Delivery.Recipients do
   alias Notifications.Settings
   alias Notifications.Unread.{Access, Repo}
 
-  @type kind :: :mention | :message | :direct | :call
+  @type kind :: :mention | :message | :direct | :call | :transfer
+
+  @spec for_ownership_transfer(map()) :: {:ok, %{String.t() => kind()}}
+  def for_ownership_transfer(%{status: "pending", to_user_id: to_user_id}),
+    do: {:ok, %{to_user_id => :transfer}}
+
+  def for_ownership_transfer(%{status: status, from_user_id: from_user_id})
+      when status in ["accepted", "rejected", "expired"],
+      do: {:ok, %{from_user_id => :transfer}}
+
+  def for_ownership_transfer(_event), do: {:ok, %{}}
 
   @spec for_private_call(map()) :: {:ok, %{String.t() => kind()}}
   def for_private_call(%{status: "ringing", recipient_id: recipient_id}),

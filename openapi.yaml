@@ -80,15 +80,16 @@ components:
           x-struct:
           x-validate:
         kind:
-          description: '`mention`: te mencionaron en un canal. `direct_message`: te escribieron.'
+          description: '`mention`: te mencionaron en un canal. `direct_message`: te escribieron. `ownership_transfer`: te ofrecieron la propiedad de un servidor o respondieron a tu ofrecimiento.'
           enum:
             - mention
             - direct_message
+            - ownership_transfer
           type: string
           x-struct:
           x-validate:
         message_id:
-          description: Id (UUIDv7) del mensaje.
+          description: Id del mensaje (UUIDv7); en `ownership_transfer`, el id de la transferencia.
           type: string
           x-struct:
           x-validate:
@@ -98,8 +99,24 @@ components:
           x-struct:
           x-validate:
         server_id:
-          description: Solo en `mention`.
+          description: Solo en `mention` y `ownership_transfer`.
           nullable: true
+          type: string
+          x-struct:
+          x-validate:
+        to_user_id:
+          description: 'Quien recibe el ofrecimiento. Solo en `ownership_transfer`: si es quien consulta, el aviso es de un ofrecimiento hecho a él; si no, es la respuesta a su ofrecimiento (`author_id` es el dueño que ofreció).'
+          type: string
+          x-struct:
+          x-validate:
+        transfer_status:
+          description: Estado actual de la transferencia. Solo en `ownership_transfer`. La entrada del receptor se actualiza cuando se resuelve; la del dueño anterior aparece al resolverse.
+          enum:
+            - pending
+            - accepted
+            - rejected
+            - cancelled
+            - expired
           type: string
           x-struct:
           x-validate:

@@ -156,6 +156,30 @@ defmodule Notifications.Events.Event do
     ]
   end
 
+  defmodule OwnershipTransferUpdated do
+    @enforce_keys [
+      :event_id,
+      :occurred_at,
+      :transfer_id,
+      :server_id,
+      :from_user_id,
+      :to_user_id,
+      :status,
+      :created_at
+    ]
+    defstruct [
+      :event_id,
+      :occurred_at,
+      :transfer_id,
+      :server_id,
+      :from_user_id,
+      :to_user_id,
+      :status,
+      :created_at,
+      :resolved_at
+    ]
+  end
+
   defmodule PlatformStatusChanged do
     @enforce_keys [:event_id, :occurred_at, :status]
     defstruct [:event_id, :occurred_at, :status]
@@ -199,6 +223,7 @@ defmodule Notifications.Events.Event do
     {"messaging.message_deleted", MessageDeleted},
     {"users.profile_updated", UserProfileUpdated},
     {"servers.server_updated", ServerUpdated},
+    {"servers.ownership_transfer_updated", OwnershipTransferUpdated},
     {"messaging.user_presence_changed", UserPresenceChanged},
     {"voice.private_call", PrivateCall},
     {"platform.status_changed", PlatformStatusChanged},
@@ -206,6 +231,7 @@ defmodule Notifications.Events.Event do
   ]
 
   @connections ~w(active idle none)
+  @transfer_statuses ~w(pending accepted rejected cancelled expired)
 
   @spec routing_keys() :: [String.t()]
   def routing_keys, do: Enum.map(@routing_keys, &elem(&1, 0))
@@ -331,6 +357,18 @@ defmodule Notifications.Events.Event do
     end
   end
 
+  defp fields(OwnershipTransferUpdated, payload) do
+    with {:ok, base} <-
+           strings(payload, ~w(event_id transfer_id server_id from_user_id to_user_id status)a),
+         true <- base.status in @transfer_statuses,
+         {:ok, created_at} <- parse_time(Map.get(payload, "created_at")),
+         {:ok, resolved_at} <- optional_time(payload, "resolved_at") do
+      {:ok, base |> Map.put(:created_at, created_at) |> Map.put(:resolved_at, resolved_at)}
+    else
+      _invalid -> {:error, :invalid_payload}
+    end
+  end
+
   defp fields(PlatformStatusChanged, payload) do
     with {:ok, base} <- strings(payload, ~w(event_id status)a),
          true <- base.status in ~w(operational degraded maintenance) do
@@ -352,6 +390,13 @@ defmodule Notifications.Events.Event do
        |> Map.put(:audience_user_ids, Enum.uniq(audience_user_ids))}
     else
       _invalid -> {:error, :invalid_payload}
+    end
+  end
+
+  defp optional_time(payload, key) do
+    case Map.get(payload, key) do
+      nil -> {:ok, nil}
+      value -> parse_time(value)
     end
   end
 

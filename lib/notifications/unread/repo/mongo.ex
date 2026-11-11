@@ -471,6 +471,16 @@ defmodule Notifications.Unread.Repo.Mongo do
   end
 
   @impl true
+  def upsert_history(items) do
+    operations =
+      Enum.map(items, fn %{"_id" => id} = item ->
+        {id, %{"$set" => Map.delete(item, "_id")}}
+      end)
+
+    upsert_many(@history, operations)
+  end
+
+  @impl true
   def list_history(user_id, before, limit) do
     sort = [occurred_at: -1, message_id: -1]
 

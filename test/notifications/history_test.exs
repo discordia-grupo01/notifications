@@ -514,4 +514,127 @@ defmodule Notifications.HistoryTest do
       for bad <- [nil, 123, %{}, ["1_x"]], do: assert(History.decode_cursor(bad) == :error)
     end
   end
+
+  describe "record_transfer/1" do
+    defp transfer_event(extra) do
+      Map.merge(
+        %{
+          event_id: "e1",
+          occurred_at: @at,
+          transfer_id: "t1",
+          server_id: @s1,
+          from_user_id: "owner",
+          to_user_id: "member",
+          status: "pending",
+          created_at: @at,
+          resolved_at: nil
+        },
+        extra
+      )
+    end
+
+    defp capture_upsert do
+      test = self()
+      expect(RepoMock, :upsert_history, fn items -> send(test, {:upsert, items}) && :ok end)
+    end
+
+    test "a pending transfer leaves one entry for the recipient" do
+      capture_upsert()
+
+      assert History.record_transfer(transfer_event(%{})) == :ok
+
+      assert_received {:upsert, [item]}
+
+      assert %{
+               "_id" => "member:t1",
+               "user_id" => "member",
+               "kind" => "ownership_transfer",
+               "message_id" => "t1",
+               "author_id" => "owner",
+               "to_user_id" => "member",
+               "server_id" => @s1,
+               "transfer_status" => "pending",
+               "occurred_at" => @at
+             } = item
+    end
+
+    test "an answer updates the recipient's entry and adds one for the previous owner" do
+      capture_upsert()
+      resolved = ~U[2026-10-31 13:00:00.000000Z]
+
+      event = transfer_event(%{status: "accepted", resolved_at: resolved, occurred_at: resolved})
+      assert History.record_transfer(event) == :ok
+
+      assert_received {:upsert, [recipient, owner]}
+
+      assert %{"_id" => "member:t1", "transfer_status" => "accepted", "occurred_at" => @at} =
+               recipient
+
+      assert %{
+               "_id" => "owner:t1",
+               "user_id" => "owner",
+               "transfer_status" => "accepted",
+               "to_user_id" => "member",
+               "occurred_at" => ^resolved
+             } = owner
+    end
+
+    test "an expiry also tells the previous owner" do
+      capture_upsert()
+      resolved = ~U[2026-10-31 13:00:00.000000Z]
+
+      History.record_transfer(
+        transfer_event(%{status: "expired", resolved_at: resolved, occurred_at: resolved})
+      )
+
+      assert_received {:upsert, items}
+      assert Enum.map(items, & &1["user_id"]) == ["member", "owner"]
+    end
+
+    test "a cancellation only closes the recipient's entry" do
+      capture_upsert()
+      resolved = ~U[2026-10-31 13:00:00.000000Z]
+
+      History.record_transfer(
+        transfer_event(%{status: "cancelled", resolved_at: resolved, occurred_at: resolved})
+      )
+
+      assert_received {:upsert, [item]}
+      assert %{"user_id" => "member", "transfer_status" => "cancelled"} = item
+    end
+  end
+
+  describe "list/2 with transfers" do
+    test "renders the transfer fields only for that kind" do
+      expect(RepoMock, :list_history, fn @me, nil, 50 ->
+        {:ok,
+         [
+           %{
+             "kind" => "ownership_transfer",
+             "message_id" => "t1",
+             "author_id" => "owner",
+             "to_user_id" => @me,
+             "transfer_status" => "pending",
+             "server_id" => @s1,
+             "occurred_at" => @at
+           },
+           %{
+             "kind" => "direct_message",
+             "message_id" => @m1,
+             "author_id" => "u2",
+             "conversation_id" => "conv-1",
+             "occurred_at" => @at
+           }
+         ]}
+      end)
+
+      assert {:ok, %{items: [transfer, direct]}} = History.list(@me)
+
+      assert transfer["kind"] == "ownership_transfer"
+      assert transfer["transfer_status"] == "pending"
+      assert transfer["to_user_id"] == @me
+      refute Map.has_key?(direct, "transfer_status")
+      refute Map.has_key?(direct, "to_user_id")
+    end
+  end
 end
