@@ -156,6 +156,11 @@ defmodule Notifications.Events.Event do
     ]
   end
 
+  defmodule Ping do
+    @enforce_keys [:event_id, :occurred_at, :routing_key, :fields]
+    defstruct [:event_id, :occurred_at, :routing_key, :fields]
+  end
+
   defmodule OwnershipTransferUpdated do
     @enforce_keys [
       :event_id,
@@ -230,18 +235,36 @@ defmodule Notifications.Events.Event do
     {"platform.health_changed", PlatformHealthChanged}
   ]
 
+  @ping_fields %{
+    "servers.member_banned" => ~w(server_id user_id)a,
+    "servers.member_unbanned" => ~w(server_id user_id)a,
+    "servers.member_kicked" => ~w(server_id user_id)a,
+    "servers.member_muted" => ~w(server_id user_id)a,
+    "servers.member_unmuted" => ~w(server_id user_id)a,
+    "servers.word_filter_updated" => ~w(server_id)a,
+    "servers.moderation_action_recorded" => ~w(server_id)a,
+    "servers.report_updated" => ~w(server_id)a,
+    "servers.emoji_created" => ~w(server_id)a,
+    "servers.emoji_deleted" => ~w(server_id)a,
+    "servers.server_boost_updated" => ~w(server_id)a,
+    "servers.resource_changed" => ~w(server_id resource)a,
+    "billing.account_changed" => ~w(user_id resource)a,
+    "billing.premium_updated" => ~w(user_id)a,
+    "admin.backoffice_changed" => ~w(resource)a
+  }
+
   @connections ~w(active idle none)
   @transfer_statuses ~w(pending accepted rejected cancelled expired)
 
   @spec routing_keys() :: [String.t()]
-  def routing_keys, do: Enum.map(@routing_keys, &elem(&1, 0))
+  def routing_keys, do: Enum.map(@routing_keys, &elem(&1, 0)) ++ Map.keys(@ping_fields)
 
   @spec parse(String.t(), map()) ::
           {:ok, struct()} | {:error, :unknown_routing_key | :invalid_payload}
   def parse(routing_key, payload) when is_map(payload) do
     case List.keyfind(@routing_keys, routing_key, 0) do
       nil ->
-        {:error, :unknown_routing_key}
+        parse_ping(routing_key, payload)
 
       {_key, module} ->
         with {:ok, fields} <- fields(module, payload),
@@ -252,6 +275,37 @@ defmodule Notifications.Events.Event do
   end
 
   def parse(_routing_key, _payload), do: {:error, :invalid_payload}
+
+  defp parse_ping(routing_key, payload) do
+    case Map.fetch(@ping_fields, routing_key) do
+      :error ->
+        {:error, :unknown_routing_key}
+
+      {:ok, names} ->
+        with {:ok, base} <- strings(payload, [:event_id | names]),
+             {:ok, occurred_at} <- parse_time(Map.get(payload, "occurred_at")),
+             {:ok, extra} <- ping_extra(routing_key, payload) do
+          {:ok,
+           %Ping{
+             event_id: base.event_id,
+             occurred_at: occurred_at,
+             routing_key: routing_key,
+             fields: base |> Map.delete(:event_id) |> Map.merge(extra)
+           }}
+        end
+    end
+  end
+
+  defp ping_extra("admin.backoffice_changed", payload) do
+    with {:ok, audience} <- string_list(payload, "audience_user_ids"),
+         true <- payload["resource"] in ~w(users servers reports staff dossier metrics) do
+      {:ok, %{audience_user_ids: Enum.uniq(audience)}}
+    else
+      _invalid -> {:error, :invalid_payload}
+    end
+  end
+
+  defp ping_extra(_routing_key, _payload), do: {:ok, %{}}
 
   defp fields(ChannelCreated, payload),
     do: strings(payload, ~w(event_id server_id channel_id name kind)a)

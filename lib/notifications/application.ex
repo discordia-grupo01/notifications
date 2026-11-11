@@ -20,7 +20,9 @@ defmodule Notifications.Application do
              mongo_url,
              Application.fetch_env!(:notifications, :mongo_pool_size)
            )}
-        ] ++ index_children() ++ amqp_children() ++ [NotificationsWeb.Endpoint]
+        ] ++
+        index_children() ++
+        [Notifications.Realtime.Debouncer] ++ amqp_children() ++ [NotificationsWeb.Endpoint]
 
     opts = [strategy: :one_for_one, name: Notifications.Supervisor]
 

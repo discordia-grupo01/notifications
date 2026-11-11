@@ -18,6 +18,7 @@ defmodule Notifications.Events.LifecycleTest do
   end
 
   setup do
+    stub(PushMock, :publish, fn _topic, _event, _payload -> :ok end)
     Application.put_env(:notifications, :push, PushMock)
     on_exit(fn -> Application.delete_env(:notifications, :push) end)
   end
@@ -97,6 +98,7 @@ defmodule Notifications.Events.LifecycleTest do
     end)
 
     expect(RepoMock, :delete_server_data, fn "s1", ["c1", "c2"] -> :ok end)
+    expect(PushMock, :publish, fn "server:s1", "changed", %{"resource" => "servers"} -> :ok end)
     expect(PushMock, :publish, fn "server:s1", "resync", %{} -> :ok end)
 
     assert Lifecycle.handle(event) == :ok
@@ -604,16 +606,38 @@ defmodule Notifications.Events.LifecycleTest do
           base(Map.merge(%{user_id: "u1", version: 3, name: "Ana"}, extra))
         )
 
-    test "keeps the name of the user" do
+    test "keeps the name of the user and tells everybody who shares a server with them" do
       expect(DeliveryRepoMock, :apply_user_name, fn "u1", "Ana", 3 -> {:ok, :applied} end)
 
+      expect(RepoMock, :list_memberships, fn "u1" ->
+        {:ok, [%{"server_id" => "s1"}, %{"server_id" => "s2"}]}
+      end)
+
+      test = self()
+
+      stub(PushMock, :publish, fn topic, "changed", payload ->
+        send(test, {:ping, topic, payload})
+        :ok
+      end)
+
       assert Lifecycle.handle(profile_event()) == :ok
+
+      assert_received {:ping, "user:u1", %{"resource" => "profile", "user_id" => "u1"}}
+      assert_received {:ping, "server:s1", %{"resource" => "profile", "user_id" => "u1"}}
+      assert_received {:ping, "server:s2", %{"resource" => "profile", "user_id" => "u1"}}
     end
 
-    test "an older version is ignored" do
+    test "an older version is ignored and nobody is told" do
       expect(DeliveryRepoMock, :apply_user_name, fn _id, _name, _version -> {:ok, :stale} end)
+      test = self()
+
+      stub(PushMock, :publish, fn topic, _event, _payload ->
+        send(test, {:ping, topic})
+        :ok
+      end)
 
       assert Lifecycle.handle(profile_event()) == {:ignored, :stale}
+      refute_received {:ping, _topic}
     end
 
     test "a storage failure is returned so the event is retried" do
