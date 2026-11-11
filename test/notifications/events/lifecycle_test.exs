@@ -674,4 +674,91 @@ defmodule Notifications.Events.LifecycleTest do
       assert Lifecycle.handle(presence_event()) == {:error, :timeout}
     end
   end
+
+  describe "servers.ownership_transfer_updated" do
+    @created ~U[2026-10-23 11:00:00.000000Z]
+
+    defp transfer_event(extra \\ %{}) do
+      struct!(
+        Event.OwnershipTransferUpdated,
+        base(
+          Map.merge(
+            %{
+              transfer_id: "t1",
+              server_id: "s1",
+              from_user_id: "owner",
+              to_user_id: "member",
+              status: "pending",
+              created_at: @created,
+              resolved_at: nil
+            },
+            extra
+          )
+        )
+      )
+    end
+
+    test "records the entry for the recipient and tries to push it" do
+      alive()
+
+      expect(RepoMock, :apply_clock, fn "transfer:t1", "pending", @at, expires_at ->
+        assert %DateTime{} = expires_at
+        {:ok, :applied}
+      end)
+
+      expect(RepoMock, :upsert_history, fn [item] ->
+        assert %{"_id" => "member:t1", "kind" => "ownership_transfer"} = item
+        :ok
+      end)
+
+      expect(DeliveryRepoMock, :list_devices, fn ["member"] -> {:ok, []} end)
+
+      assert Lifecycle.handle(transfer_event()) == :ok
+    end
+
+    test "the answer reaches the previous owner" do
+      alive()
+
+      expect(RepoMock, :apply_clock, fn "transfer:t1", "accepted", @at, _expires ->
+        {:ok, :applied}
+      end)
+
+      expect(RepoMock, :upsert_history, fn items ->
+        assert Enum.map(items, & &1["user_id"]) == ["member", "owner"]
+        :ok
+      end)
+
+      expect(DeliveryRepoMock, :list_devices, fn ["owner"] -> {:ok, []} end)
+
+      assert Lifecycle.handle(transfer_event(%{status: "accepted", resolved_at: @at})) == :ok
+    end
+
+    test "a stale snapshot is ignored and writes nothing" do
+      alive()
+
+      expect(RepoMock, :apply_clock, fn "transfer:t1", "pending", @at, _expires ->
+        {:ok, :stale}
+      end)
+
+      assert Lifecycle.handle(transfer_event()) == {:ignored, :stale}
+    end
+
+    test "is ignored when the server was deleted" do
+      expect(RepoMock, :get_clock, fn "server:s1" -> %{"state" => "deleted"} end)
+
+      assert Lifecycle.handle(transfer_event()) == {:ignored, :server_deleted}
+    end
+
+    test "returns the error so the message is retried when the history can't be written" do
+      alive()
+
+      expect(RepoMock, :apply_clock, fn "transfer:t1", "pending", @at, _expires ->
+        {:ok, :applied}
+      end)
+
+      expect(RepoMock, :upsert_history, fn _items -> {:error, :timeout} end)
+
+      assert Lifecycle.handle(transfer_event()) == {:error, :timeout}
+    end
+  end
 end

@@ -188,6 +188,26 @@ defmodule Notifications.Events.Lifecycle do
     end
   end
 
+  def handle(%Event.OwnershipTransferUpdated{} = event) do
+    with :alive <- server_state(event.server_id),
+         {:ok, :applied} <-
+           clock(
+             transfer_key(event.transfer_id),
+             event.status,
+             event.occurred_at,
+             tombstone_expiry()
+           ),
+         :ok <- History.record_transfer(event),
+         :ok <- Delivery.notify(event) do
+      Logger.info("ownership_transfer_applied",
+        server_id: event.server_id,
+        status: event.status
+      )
+    else
+      other -> outcome(other, "servers.ownership_transfer_updated")
+    end
+  end
+
   def handle(%Event.PrivateCall{} = event) do
     Delivery.notify(event)
   end
@@ -293,6 +313,7 @@ defmodule Notifications.Events.Lifecycle do
 
   defp tombstone_expiry, do: DateTime.add(DateTime.utc_now(), @tombstone_ttl_seconds, :second)
 
+  defp transfer_key(transfer_id), do: "transfer:" <> transfer_id
   defp channel_key(channel_id), do: "channel:" <> channel_id
   defp server_key(server_id), do: "server:" <> server_id
   defp member_key(%{server_id: server_id, user_id: user_id}), do: "member:#{server_id}:#{user_id}"

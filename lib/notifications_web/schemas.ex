@@ -176,13 +176,22 @@ defmodule NotificationsWeb.Schemas do
       properties: %{
         kind: %Schema{
           type: :string,
-          enum: ["mention", "direct_message"],
-          description: "`mention`: te mencionaron en un canal. `direct_message`: te escribieron."
+          enum: ["mention", "direct_message", "ownership_transfer"],
+          description:
+            "`mention`: te mencionaron en un canal. `direct_message`: te escribieron. `ownership_transfer`: te ofrecieron la propiedad de un servidor o respondieron a tu ofrecimiento."
         },
-        message_id: %Schema{type: :string, description: "Id (UUIDv7) del mensaje."},
+        message_id: %Schema{
+          type: :string,
+          description:
+            "Id del mensaje (UUIDv7); en `ownership_transfer`, el id de la transferencia."
+        },
         author_id: %Schema{type: :string},
         occurred_at: %Schema{type: :string, format: :"date-time"},
-        server_id: %Schema{type: :string, nullable: true, description: "Solo en `mention`."},
+        server_id: %Schema{
+          type: :string,
+          nullable: true,
+          description: "Solo en `mention` y `ownership_transfer`."
+        },
         channel_id: %Schema{
           type: :string,
           nullable: true,
@@ -192,6 +201,17 @@ defmodule NotificationsWeb.Schemas do
           type: :string,
           nullable: true,
           description: "Conversación del mensaje directo. Solo en `direct_message`."
+        },
+        to_user_id: %Schema{
+          type: :string,
+          description:
+            "Quien recibe el ofrecimiento. Solo en `ownership_transfer`: si es quien consulta, el aviso es de un ofrecimiento hecho a él; si no, es la respuesta a su ofrecimiento (`author_id` es el dueño que ofreció)."
+        },
+        transfer_status: %Schema{
+          type: :string,
+          enum: ["pending", "accepted", "rejected", "cancelled", "expired"],
+          description:
+            "Estado actual de la transferencia. Solo en `ownership_transfer`. La entrada del receptor se actualiza cuando se resuelve; la del dueño anterior aparece al resolverse."
         }
       },
       required: [:kind, :message_id, :author_id, :occurred_at]
