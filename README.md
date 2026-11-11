@@ -315,6 +315,33 @@ general y la regla de presencia. `message_id` de esa entrada es el id de la tran
 `to_user_id` dice a quién se ofreció (si es quien consulta, es un ofrecimiento hecho a él; si no,
 es la respuesta a su ofrecimiento).
 
+**Cambios en tiempo real (`changed`).** Para que ningún cliente tenga que recargar, cada evento que
+consume el servicio, una vez aplicado, empuja un aviso `changed` por el socket `notifications:<user_id>`
+(al tópico `user:<id>` de quien corresponde o al `server:<id>` de todos los miembros). Es solo un aviso:
+**no lleva datos**, dice qué volver a pedir; el cliente refetchea ese recurso por REST, así que los permisos
+y los formatos siguen siendo los de siempre. Si el socket está caído, los clientes refrescan cada 15 a 30 s.
+
+Payload: `{"resource": "...", "server_id": "..." (si aplica), "user_id": "..." (si aplica), "kind": "..." (backoffice)}`.
+
+| `resource` | Va a | Lo dispara | Qué vuelve a pedir el cliente |
+|---|---|---|---|
+| `servers` | el usuario (o el servidor al borrarse) | entrar o salir de un servidor, borrado de un servidor | la lista de servidores |
+| `server` | el servidor | `server_updated` (nombre), `owner_updated`, `server_boost_updated`, `resource_changed` (ícono, banner, enlace) | los datos del servidor |
+| `channels` | el servidor, o el usuario si cambia lo que ve | canales creados o borrados, permisos por canal, roles | canales y categorías |
+| `roles` | el servidor o el usuario | roles creados, editados, borrados, reordenados; roles de un miembro | roles y permisos |
+| `members` | el servidor | alta, baja, expulsión, baneo, silencio, roles de un miembro, dueño | miembros |
+| `profile` | el usuario y cada servidor que comparte | `users.profile_updated` (nombre, foto, estado), `billing.premium_updated` | el perfil de ese `user_id` |
+| `moderation` | el servidor | bans, silencios, filtro de palabras, auditoría | bans, silencios y filtro |
+| `reports` | el servidor | `servers.report_updated` | reportes pendientes |
+| `emojis` | el servidor | emojis creados o borrados | emojis |
+| `notifications` | el usuario | mención, mensaje directo, edición, transferencia de propiedad | el historial del centro de notificaciones |
+| `metrics` | el servidor | mensajes, altas y bajas (como mucho una vez cada 3 s por servidor) | las métricas del servidor |
+| `points`, `boosts`, `purchases`, `premium` | el usuario | `billing.account_changed`, `billing.premium_updated` | saldo y movimientos, boosts, compras, Premium |
+| `backoffice` (`kind`: `users`, `servers`, `reports`, `staff`, `dossier`, `metrics`) | cada miembro del staff de la audiencia | `admin.backoffice_changed` | la pantalla del backoffice que corresponda |
+
+Un evento viejo, repetido o que falla no empuja nada (solo se avisa lo ya aplicado), y un push que falla
+nunca rompe el consumo del evento.
+
 **Dispositivos** (el token viaja solo en el cuerpo, nunca en la URL ni en los logs):
 
 | Método y ruta | Qué hace |

@@ -179,6 +179,29 @@ defmodule NotificationsWeb.NotificationsChannelTest do
       assert_push "status_changed", %{"refetch" => true, "status" => "operational"}
     end
 
+    test "forwards the changes of the user and of each of their servers" do
+      join_own()
+      assert_push "snapshot", _
+
+      Endpoint.broadcast("user:" <> @me, "changed", %{"resource" => "points"})
+      assert_push "changed", %{"resource" => "points"}
+
+      Endpoint.broadcast("server:" <> @s1, "changed", %{
+        "resource" => "members",
+        "server_id" => @s1
+      })
+
+      assert_push "changed", %{"resource" => "members", "server_id" => @s1}
+    end
+
+    test "does not forward the changes of a server the user does not belong to" do
+      join_own()
+      assert_push "snapshot", _
+
+      Endpoint.broadcast("server:otro", "changed", %{"resource" => "members"})
+      refute_push "changed", _
+    end
+
     test "CA1/CA2: a new message in a channel marks the channel and its server unread" do
       join_own()
       assert_push "snapshot", _
