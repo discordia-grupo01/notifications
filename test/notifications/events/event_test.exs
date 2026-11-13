@@ -528,7 +528,8 @@ defmodule Notifications.Events.EventTest do
     test "admin.backoffice_changed accepts the account recovery requests" do
       payload = base(%{"resource" => "recovery_requests", "audience_user_ids" => ["a"]})
 
-      assert {:ok, %Event.Ping{fields: %{resource: "recovery_requests", audience_user_ids: ["a"]}}} =
+      assert {:ok,
+              %Event.Ping{fields: %{resource: "recovery_requests", audience_user_ids: ["a"]}}} =
                Event.parse("admin.backoffice_changed", payload)
     end
 
