@@ -298,7 +298,8 @@ defmodule Notifications.Events.Event do
 
   defp ping_extra("admin.backoffice_changed", payload) do
     with {:ok, audience} <- string_list(payload, "audience_user_ids"),
-         true <- payload["resource"] in ~w(users servers reports staff dossier metrics) do
+         true <-
+           payload["resource"] in ~w(users servers reports staff dossier metrics recovery_requests) do
       {:ok, %{audience_user_ids: Enum.uniq(audience)}}
     else
       _invalid -> {:error, :invalid_payload}

@@ -525,6 +525,14 @@ defmodule Notifications.Events.EventTest do
                Event.parse("admin.backoffice_changed", payload)
     end
 
+    test "admin.backoffice_changed accepts the account recovery requests" do
+      payload = base(%{"resource" => "recovery_requests", "audience_user_ids" => ["a"]})
+
+      assert {:ok,
+              %Event.Ping{fields: %{resource: "recovery_requests", audience_user_ids: ["a"]}}} =
+               Event.parse("admin.backoffice_changed", payload)
+    end
+
     test "they are rejected when something is missing or the resource is unknown" do
       for {key, broken} <- [
             {"servers.member_banned", base(%{"server_id" => "s1"})},
