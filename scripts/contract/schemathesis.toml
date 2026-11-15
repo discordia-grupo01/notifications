@@ -1,0 +1,7 @@
+# Ajustes de Schemathesis para notifications. Cada excepcion dice por que existe.
+
+# Cowboy contesta 501 (sin cuerpo) a TRACE antes de que el pedido llegue a Phoenix, y
+# Schemathesis prueba TRACE como metodo no declarado. Un 501 por un metodo que el servidor no
+# implementa no es una falla de la API, asi que se acepta; el resto de los 5xx siguen fallando.
+[checks.not_a_server_error]
+expected-statuses = ["2xx", "3xx", "4xx", "501"]
