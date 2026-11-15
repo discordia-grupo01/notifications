@@ -70,6 +70,14 @@ if [ -z "${SCHEMATHESIS_BIN:-}" ]; then
   fi
 fi
 
+# Python del mismo entorno que Schemathesis (trae PyYAML), para medir la cobertura.
+case "$SCHEMATHESIS_BIN" in
+  */Scripts/*) PY_VENV="$(dirname "$SCHEMATHESIS_BIN")/python.exe" ;;
+  */bin/*) PY_VENV="$(dirname "$SCHEMATHESIS_BIN")/python" ;;
+  *) PY_VENV="python3" ;;
+esac
+[ -x "$PY_VENV" ] || PY_VENV="python3"
+
 # JWT sin firma valida: el servicio solo lee el sub (Notifications.Auth.Token no verifica la firma).
 b64url() { base64 | tr -d '=\n' | tr '+/' '-_'; }
 TOKEN="$(printf '{"alg":"none","typ":"JWT"}' | b64url).$(printf '{"sub":"%s"}' "$USER_ID" | b64url).contract"
@@ -97,9 +105,13 @@ APP_ENV=(
   "CHECK_ORIGIN=false"
   "LOG_LEVEL=warning"
   "EXPO_PUSH_URL=http://127.0.0.1:1/push"
+  # Clave VAPID de juguete (32 bytes en 0x01, no es un secreto): solo para que
+  # GET /push/vapid-public-key responda 200. En la corrida no hay eventos, asi que no sale ningun push.
+  "VAPID_PRIVATE_KEY=AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+  "VAPID_SUBJECT=mailto:contract@example.test"
   "HISTORY_RETENTION_DAYS=0"
 )
-UNSET_ENV=(VAPID_PRIVATE_KEY VAPID_SUBJECT EXPO_ACCESS_TOKEN PUSH_MAX_DEVICES PUSH_ALLOWED_HOSTS
+UNSET_ENV=(EXPO_ACCESS_TOKEN PUSH_MAX_DEVICES PUSH_ALLOWED_HOSTS
   OTEL_EXPORTER_OTLP_ENDPOINT OTEL_EXPORTER_OTLP_HEADERS LOG_SHIP_URL LOG_SHIP_API_KEY
   TS_AUTHKEY)
 
@@ -169,23 +181,40 @@ until [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/readyz" 2> /dev/nul
 done
 log "servicio listo"
 
+# Siembra un servidor, un canal y una membresia para que settings llegue al 200: con mongosh
+# local si hay; si no, dentro del contenedor de contract-deps-up; si no, con la imagen mongo.
+log "sembrando datos de prueba en Mongo"
+if command -v mongosh > /dev/null 2>&1; then
+  mongosh "$MONGO_URL" --quiet --file scripts/contract/seed.js > /dev/null
+elif docker ps --format '{{.Names}}' 2> /dev/null | grep -qx contract-notifications-mongo; then
+  docker exec -i contract-notifications-mongo mongosh --quiet "mongodb://localhost:27017/${MONGO_URL##*/}" < scripts/contract/seed.js > /dev/null
+else
+  docker run --rm --network host -v "$(pwd):/work" mongo:7 mongosh "$MONGO_URL" --quiet --file /work/scripts/contract/seed.js > /dev/null
+fi
+
 log "corriendo Schemathesis ($CONTRACT_MAX_EXAMPLES casos por operacion, semilla $CONTRACT_SEED)"
 export PYTHONUTF8=1 PYTHONIOENCODING=utf-8
 set +e
+# Un hook fija el servidor y el canal sembrados en la mitad de los casos (ver hooks.py).
+export SCHEMATHESIS_HOOKS=scripts.contract.hooks PYTHONPATH="$ROOT"
 # unsupported_method queda afuera: Cowboy responde 501 a TRACE (no el 405 que exige) antes de llegar
 # a Phoenix, y con los demas metodos no declarados Phoenix ya responde 404. Ver schemathesis.toml.
 "$SCHEMATHESIS_BIN" --config-file scripts/contract/schemathesis.toml run openapi.yaml \
   --url "$BASE_URL" \
   --header "Authorization: Bearer $TOKEN" \
-  --checks all \
   --exclude-checks unsupported_method \
   --max-examples "$CONTRACT_MAX_EXAMPLES" \
   --seed "$CONTRACT_SEED" \
   --workers 1 \
-  --report junit --report-dir "$CONTRACT_REPORT_DIR" \
+  --report junit,har --report-dir "$CONTRACT_REPORT_DIR" \
   --no-color
 status=$?
 set -e
+
+# Cobertura de camino feliz: cuantas operaciones del contrato obtuvieron un 2xx real.
+if [ "$status" -eq 0 ]; then
+  "$PY_VENV" scripts/contract/coverage.py openapi.yaml "$CONTRACT_REPORT_DIR"/har-*.json || status=$?
+fi
 
 if [ "$status" -ne 0 ]; then
   show_app_log

@@ -181,14 +181,20 @@ make contract-deps-down
 ```
 
 - El servicio arranca con `MIX_ENV=prod` y secretos de juguete. La identidad sale del `sub` de un
-  JWT sin firma (el servicio no verifica la firma). No se configuran claves de push (VAPID,
-  Expo): `GET /push/vapid-public-key` responde el 404 declarado y no se envia ningun push.
+  JWT sin firma (el servicio no verifica la firma). La clave VAPID es de juguete (no es un
+  secreto) para que `GET /push/vapid-public-key` responda 200; no hay claves de Expo y en la
+  corrida no hay eventos, asi que no se envia ningun push.
 - `scripts/contract-test.sh` se niega a correr si `MONGO_URL` o `RABBITMQ_URL` no apuntan a
   `localhost`/`127.0.0.1`. Se ajusta con `APP_PORT`, `CONTRACT_MAX_EXAMPLES` (50; 25 en el CI),
   `CONTRACT_SEED` (1) y `CONTRACT_REPORT_DIR` (`contract-report/`, con el reporte JUnit y el log).
 - `CONTRACT_APP_MODE=docker` arranca el servicio dentro de un contenedor `elixir:1.16` en vez
   de usar el `mix` local; sirve si el Erlang instalado es muy nuevo para compilar las
   dependencias (el CI usa Elixir 1.16 / OTP 26).
+- Camino feliz: `scripts/contract/seed.js` siembra en Mongo un servidor, una membresia y un
+  canal (y limpia los dispositivos push, que tienen un tope de 10 por usuario) y un hook
+  (`scripts/contract/hooks.py`) usa esos ids en la mitad de los casos de `settings`. Al final
+  `scripts/contract/coverage.py` cuenta con el HAR de Schemathesis cuantas operaciones
+  obtuvieron un 2xx real y el script falla si alguna no (hoy 13 de 13).
 - Excepcion documentada: Cowboy responde 501 a `TRACE` antes de llegar a Phoenix, asi que se
   acepta ese 501 y se apaga el check `unsupported_method` (ver `scripts/contract/schemathesis.toml`).
 - Si el contrato cambia (specs de `open_api_spex`), regeneralo con `make openapi`.

@@ -5,3 +5,11 @@
 # implementa no es una falla de la API, asi que se acepta; el resto de los 5xx siguen fallando.
 [checks.not_a_server_error]
 expected-statuses = ["2xx", "3xx", "4xx", "501"]
+
+# POST /push/devices acepta una suscripcion web (endpoint, p256dh, auth) que ademas trae un
+# `token` de tipo invalido: el servidor ignora los campos que no corresponden a la variante.
+# Es mas permisivo que el contrato (oneOf), y rechazarlo cambiaria lo que ve un cliente.
+[[operations]]
+include-path = "/v1/notifications/push/devices"
+include-method = "POST"
+checks.negative_data_rejection.enabled = false
