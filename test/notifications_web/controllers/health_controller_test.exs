@@ -13,6 +13,8 @@ defmodule NotificationsWeb.HealthControllerTest do
     conn = get(conn, "/livez")
     assert conn.status == 200
     assert conn.resp_body == "ok"
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/plain"
   end
 
   test "GET /readyz is 200 when Mongo is reachable", %{conn: conn} do

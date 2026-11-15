@@ -6,3 +6,7 @@
 erl_crash.dump
 .DS_Store
 .vscode
+/.contract-venv/
+/contract-report/
+/.schemathesis/
+__pycache__/
