@@ -25,7 +25,7 @@ defmodule NotificationsWeb.HealthController do
     responses: [ok: {"ok", "text/plain", %OpenApiSpex.Schema{type: :string}}]
 
   def livez(conn, _params) do
-    send_resp(conn, 200, "ok")
+    conn |> put_resp_content_type("text/plain") |> send_resp(200, "ok")
   end
 
   operation :readyz,
