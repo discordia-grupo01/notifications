@@ -166,6 +166,33 @@ El código se revisa con `make format`, `make lint` y `make dialyzer`. `make ci`
 git config core.hooksPath .githooks
 ```
 
+### Tests de contrato
+Schemathesis (`4.33.4`) corre `openapi.yaml` contra el servicio real, con Mongo y RabbitMQ
+locales: un 5xx, un status no declarado o una respuesta que no cumple el esquema hacen fallar
+la corrida. El WebSocket queda fuera (es REST solamente).
+
+```bash
+python -m venv .contract-venv
+.contract-venv/bin/pip install schemathesis==4.33.4   # en Windows: .contract-venv/Scripts
+
+make contract-deps-up    # Mongo (55527) y RabbitMQ (55517) en contenedores contract-notifications-*
+make contract-test       # arranca el servicio en 18087, corre Schemathesis y lo apaga
+make contract-deps-down
+```
+
+- El servicio arranca con `MIX_ENV=prod` y secretos de juguete. La identidad sale del `sub` de un
+  JWT sin firma (el servicio no verifica la firma). No se configuran claves de push (VAPID,
+  Expo): `GET /push/vapid-public-key` responde el 404 declarado y no se envia ningun push.
+- `scripts/contract-test.sh` se niega a correr si `MONGO_URL` o `RABBITMQ_URL` no apuntan a
+  `localhost`/`127.0.0.1`. Se ajusta con `APP_PORT`, `CONTRACT_MAX_EXAMPLES` (50; 25 en el CI),
+  `CONTRACT_SEED` (1) y `CONTRACT_REPORT_DIR` (`contract-report/`, con el reporte JUnit y el log).
+- `CONTRACT_APP_MODE=docker` arranca el servicio dentro de un contenedor `elixir:1.16` en vez
+  de usar el `mix` local; sirve si el Erlang instalado es muy nuevo para compilar las
+  dependencias (el CI usa Elixir 1.16 / OTP 26).
+- Excepcion documentada: Cowboy responde 501 a `TRACE` antes de llegar a Phoenix, asi que se
+  acepta ese 501 y se apaga el check `unsupported_method` (ver `scripts/contract/schemathesis.toml`).
+- Si el contrato cambia (specs de `open_api_spex`), regeneralo con `make openapi`.
+
 ## Más documentación
 
 En este repositorio:
