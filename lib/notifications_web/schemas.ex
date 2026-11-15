@@ -50,6 +50,7 @@ defmodule NotificationsWeb.Schemas do
       title: "SettingsRequest",
       type: :object,
       description: "Al menos uno de `muted` o `level`. Solo cambia lo que se manda.",
+      minProperties: 1,
       properties: %{
         muted: %Schema{
           type: :boolean,
@@ -255,22 +256,48 @@ defmodule NotificationsWeb.Schemas do
         platform: %Schema{type: :string, enum: ["web", "android", "ios"]},
         token: %Schema{
           type: :string,
+          pattern: "^(Exponent|Expo)PushToken\\[[A-Za-z0-9_-]{1,100}\\]$",
           description: "Solo `expo`: `ExponentPushToken[...]` que entrega `expo-notifications`."
         },
         endpoint: %Schema{
           type: :string,
+          maxLength: 2048,
+          pattern:
+            "^https://([A-Za-z0-9-]+\\.)*(fcm\\.googleapis\\.com|updates\\.push\\.services\\.mozilla\\.com|push\\.services\\.mozilla\\.com|web\\.push\\.apple\\.com|notify\\.windows\\.com)(/[^\\s@]*)?$",
           description:
             "Solo `webpush`: URL https del servicio de push del navegador (`PushSubscription.endpoint`)."
         },
         p256dh: %Schema{
           type: :string,
+          pattern: "^[A-Za-z0-9_-]{87}$",
           description: "Solo `webpush`: clave pública del navegador, base64url (65 bytes)."
         },
         auth: %Schema{
           type: :string,
+          pattern: "^[A-Za-z0-9_-]{22}$",
           description: "Solo `webpush`: secreto de autenticación, base64url (16 bytes)."
         }
       },
+      oneOf: [
+        %Schema{
+          title: "ExpoDevice",
+          type: :object,
+          properties: %{
+            provider: %Schema{type: :string, enum: ["expo"]},
+            platform: %Schema{type: :string, enum: ["android", "ios"]}
+          },
+          required: [:token]
+        },
+        %Schema{
+          title: "WebPushDevice",
+          type: :object,
+          properties: %{
+            provider: %Schema{type: :string, enum: ["webpush"]},
+            platform: %Schema{type: :string, enum: ["web"]}
+          },
+          required: [:endpoint, :p256dh, :auth]
+        }
+      ],
       required: [:provider, :platform]
     })
   end

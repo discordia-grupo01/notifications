@@ -60,6 +60,27 @@ components:
       type: object
       x-struct: Elixir.NotificationsWeb.Schemas.ErrorResponse
       x-validate:
+    ExpoDevice:
+      properties:
+        platform:
+          enum:
+            - android
+            - ios
+          type: string
+          x-struct:
+          x-validate:
+        provider:
+          enum:
+            - expo
+          type: string
+          x-struct:
+          x-validate:
+      required:
+        - token
+      title: ExpoDevice
+      type: object
+      x-struct:
+      x-validate:
     HistoryItem:
       description: 'Una notificación del historial. Lleva solo ids (nunca el texto del mensaje): el cliente resuelve nombres y contenido con los datos que ya tiene o con messaging.'
       properties:
@@ -166,19 +187,65 @@ components:
       x-validate:
     PushDeviceRequest:
       description: 'Datos del dispositivo a registrar. Con `provider: expo` (app) va `token`; con `provider: webpush` (navegador) va la suscripción: `endpoint`, `p256dh` y `auth`. El token nunca viaja en la URL.'
+      oneOf:
+        - properties:
+            platform:
+              enum:
+                - android
+                - ios
+              type: string
+              x-struct:
+              x-validate:
+            provider:
+              enum:
+                - expo
+              type: string
+              x-struct:
+              x-validate:
+          required:
+            - token
+          title: ExpoDevice
+          type: object
+          x-struct:
+          x-validate:
+        - properties:
+            platform:
+              enum:
+                - web
+              type: string
+              x-struct:
+              x-validate:
+            provider:
+              enum:
+                - webpush
+              type: string
+              x-struct:
+              x-validate:
+          required:
+            - endpoint
+            - p256dh
+            - auth
+          title: WebPushDevice
+          type: object
+          x-struct:
+          x-validate:
       properties:
         auth:
           description: 'Solo `webpush`: secreto de autenticación, base64url (16 bytes).'
+          pattern: ^[A-Za-z0-9_-]{22}$
           type: string
           x-struct:
           x-validate:
         endpoint:
           description: 'Solo `webpush`: URL https del servicio de push del navegador (`PushSubscription.endpoint`).'
+          maxLength: 2048
+          pattern: ^https://([A-Za-z0-9-]+\.)*(fcm\.googleapis\.com|updates\.push\.services\.mozilla\.com|push\.services\.mozilla\.com|web\.push\.apple\.com|notify\.windows\.com)(/[^\s@]*)?$
           type: string
           x-struct:
           x-validate:
         p256dh:
           description: 'Solo `webpush`: clave pública del navegador, base64url (65 bytes).'
+          pattern: ^[A-Za-z0-9_-]{87}$
           type: string
           x-struct:
           x-validate:
@@ -199,6 +266,7 @@ components:
           x-validate:
         token:
           description: 'Solo `expo`: `ExponentPushToken[...]` que entrega `expo-notifications`.'
+          pattern: ^(Exponent|Expo)PushToken\[[A-Za-z0-9_-]{1,100}\]$
           type: string
           x-struct:
           x-validate:
@@ -368,6 +436,7 @@ components:
       x-validate:
     SettingsRequest:
       description: Al menos uno de `muted` o `level`. Solo cambia lo que se manda.
+      minProperties: 1
       properties:
         level:
           description: 'Qué avisa: `all` (todos los mensajes), `mentions` (solo menciones; es el valor por defecto) o `none`. `null` borra la preferencia y vuelve a heredar.'
@@ -420,6 +489,28 @@ components:
       title: VapidPublicKey
       type: object
       x-struct: Elixir.NotificationsWeb.Schemas.VapidPublicKey
+      x-validate:
+    WebPushDevice:
+      properties:
+        platform:
+          enum:
+            - web
+          type: string
+          x-struct:
+          x-validate:
+        provider:
+          enum:
+            - webpush
+          type: string
+          x-struct:
+          x-validate:
+      required:
+        - endpoint
+        - p256dh
+        - auth
+      title: WebPushDevice
+      type: object
+      x-struct:
       x-validate:
 info:
   description: 'Indicadores de no leído por canal y por servidor. Todo el estado viaja por WebSocket (canal `notifications:<user_id>` en `/notifications/socket`): al unirse se recibe el estado completo y después los cambios en vivo. Por REST se pide el ticket para abrir ese socket y se administran los silenciados de canales y servidores.'
@@ -503,6 +594,8 @@ paths:
           name: limit
           required: false
           schema:
+            maximum: 100
+            minimum: 1
             type: integer
             x-struct:
             x-validate:
@@ -511,6 +604,7 @@ paths:
           name: before
           required: false
           schema:
+            pattern: ^[0-9]{1,13}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
             type: string
             x-struct:
             x-validate:
