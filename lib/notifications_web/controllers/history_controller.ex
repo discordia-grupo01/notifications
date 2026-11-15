@@ -18,13 +18,16 @@ defmodule NotificationsWeb.HistoryController do
     parameters: [
       limit: [
         in: :query,
-        type: :integer,
+        schema: %OpenApiSpex.Schema{type: :integer, minimum: 1, maximum: @max_limit},
         required: false,
         description: "Cantidad de entradas, de 1 a 100. Por defecto 50."
       ],
       before: [
         in: :query,
-        type: :string,
+        schema: %OpenApiSpex.Schema{
+          type: :string,
+          pattern: "^[0-9]{1,13}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
         required: false,
         description:
           "`next_cursor` de la página anterior (texto opaco, se reenvía tal cual): trae las entradas más viejas."
