@@ -631,7 +631,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
 
       ref = push(socket, "mark_read", %{})
 
-      assert_reply ref, :error, %{error: %{code: "INVALID_PAYLOAD"}}
+      assert_reply ref, :error, %{error: %{code: "INVALID_BODY"}}
     end
   end
 
@@ -776,7 +776,7 @@ defmodule NotificationsWeb.NotificationsChannelTest do
 
     ref = push(socket, "nope", %{})
 
-    assert_reply ref, :error, %{error: %{code: "INVALID_PAYLOAD"}}
+    assert_reply ref, :error, %{error: %{code: "INVALID_BODY"}}
   end
 
   test "the channel stops when the first snapshot cannot be built" do
