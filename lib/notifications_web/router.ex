@@ -27,6 +27,7 @@ defmodule NotificationsWeb.Router do
     put "/settings/channels/:channel_id", SettingsController, :update_channel
 
     get "/history", HistoryController, :index
+    post "/history/transfers/read", HistoryController, :read_transfers
 
     get "/push/settings", PushController, :show_settings
     put "/push/settings", PushController, :update_settings

@@ -18,7 +18,7 @@ Servicio de notificaciones de Discordia.
 
 - **No leídos:** qué canales y servidores tienen mensajes sin leer, y cuáles tienen menciones. Sirve para los indicadores de la barra lateral.
 - **Silencios y preferencias:** silenciar un canal o un servidor y elegir qué se quiere recibir (todo, solo menciones o nada).
-- **Centro de notificaciones:** el historial de menciones y mensajes directos.
+- **Centro de notificaciones:** el historial de menciones, mensajes directos y ofrecimientos de transferencia de propiedad. Lo leído de las transferencias se guarda en el servidor (`POST /v1/notifications/history/transfers/read`), así que vale en todos los dispositivos del usuario.
 - **Push y avisos en vivo:** notificaciones al navegador y al celular, y un aviso corto por WebSocket cada vez que algo cambia en otro servicio, para que las pantallas se actualicen sin recargar.
 
 Está hecho en Elixir con Phoenix y guarda su estado en MongoDB. No llama a ningún otro servicio: todo lo que sabe lo aprende de los eventos de RabbitMQ (por eso RabbitMQ es obligatorio). Por ejemplo, para saber qué canales puede ver cada usuario guarda su propia copia de los permisos que publica `servers`.
