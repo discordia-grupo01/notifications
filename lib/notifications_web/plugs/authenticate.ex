@@ -2,6 +2,7 @@ defmodule NotificationsWeb.Plugs.Authenticate do
   import Plug.Conn
 
   alias Notifications.Auth.Token
+  alias NotificationsWeb.ApiError
 
   def init(opts), do: opts
 
@@ -13,10 +14,8 @@ defmodule NotificationsWeb.Plugs.Authenticate do
     else
       _other ->
         conn
-        |> put_status(401)
-        |> Phoenix.Controller.json(%{
-          error: %{code: "UNAUTHORIZED", message: "Token inválido o ausente.", details: %{}}
-        })
+        |> put_status(ApiError.http_status(:unauthorized))
+        |> Phoenix.Controller.json(ApiError.payload(:unauthorized))
         |> halt()
     end
   end

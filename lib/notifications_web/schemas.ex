@@ -11,8 +11,8 @@ defmodule NotificationsWeb.Schemas do
         error: %Schema{
           type: :object,
           properties: %{
-            code: %Schema{type: :string},
-            message: %Schema{type: :string},
+            code: %Schema{type: :string, pattern: "^[A-Z][A-Z0-9_]*$", example: "INVALID_BODY"},
+            message: %Schema{type: :string, minLength: 1},
             details: %Schema{type: :object}
           },
           required: [:code, :message, :details]

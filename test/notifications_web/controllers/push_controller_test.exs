@@ -57,7 +57,7 @@ defmodule NotificationsWeb.PushControllerTest do
 
     test "enabled must be a boolean", %{conn: conn} do
       for body <- [%{}, %{"enabled" => "false"}, %{"enabled" => nil}] do
-        assert %{"error" => %{"code" => "INVALID_PAYLOAD"}} =
+        assert %{"error" => %{"code" => "INVALID_BODY"}} =
                  conn
                  |> authed()
                  |> put("/v1/notifications/push/settings", body)
@@ -123,7 +123,7 @@ defmodule NotificationsWeb.PushControllerTest do
     end
 
     test "invalid devices are a 400", %{conn: conn} do
-      assert %{"error" => %{"code" => "INVALID_PAYLOAD"}} =
+      assert %{"error" => %{"code" => "INVALID_BODY"}} =
                conn
                |> authed()
                |> post("/v1/notifications/push/devices", %{"provider" => "expo"})
