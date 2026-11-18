@@ -85,7 +85,7 @@ defmodule NotificationsWeb.HistoryControllerTest do
     test "400s for limit=#{inspect(bad)}", %{conn: conn} do
       conn = conn |> authed() |> get("/v1/notifications/history", %{"limit" => unquote(bad)})
 
-      assert json_response(conn, 400)["error"]["code"] == "INVALID_PAYLOAD"
+      assert json_response(conn, 400)["error"]["code"] == "INVALID_BODY"
     end
   end
 
@@ -101,14 +101,14 @@ defmodule NotificationsWeb.HistoryControllerTest do
     test "400s for before=#{inspect(bad)}", %{conn: conn} do
       conn = conn |> authed() |> get("/v1/notifications/history", %{"before" => unquote(bad)})
 
-      assert json_response(conn, 400)["error"]["code"] == "INVALID_PAYLOAD"
+      assert json_response(conn, 400)["error"]["code"] == "INVALID_BODY"
     end
   end
 
   test "400s when the parameters are not plain strings", %{conn: conn} do
     conn = conn |> authed() |> get("/v1/notifications/history?limit[]=1")
 
-    assert json_response(conn, 400)["error"]["code"] == "INVALID_PAYLOAD"
+    assert json_response(conn, 400)["error"]["code"] == "INVALID_BODY"
   end
 
   test "503s when the storage fails", %{conn: conn} do
@@ -160,7 +160,7 @@ defmodule NotificationsWeb.HistoryControllerTest do
       test "400s for #{inspect(bad)}", %{conn: conn} do
         conn = conn |> authed() |> post(@path, unquote(Macro.escape(bad)))
 
-        assert json_response(conn, 400)["error"]["code"] == "INVALID_PAYLOAD"
+        assert json_response(conn, 400)["error"]["code"] == "INVALID_BODY"
       end
     end
 

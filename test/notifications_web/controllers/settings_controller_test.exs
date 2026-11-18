@@ -208,25 +208,25 @@ defmodule NotificationsWeb.SettingsControllerTest do
     test "400s when neither muted nor level is sent", %{conn: conn} do
       conn = put_json(conn, "/v1/notifications/settings/servers/#{@s1}", %{})
 
-      assert json_response(conn, 400)["error"]["code"] == "INVALID_PAYLOAD"
+      assert json_response(conn, 400)["error"]["code"] == "INVALID_BODY"
     end
 
     test "400s when muted is not a boolean", %{conn: conn} do
       conn = put_json(conn, "/v1/notifications/settings/servers/#{@s1}", %{"muted" => "yes"})
 
-      assert json_response(conn, 400)["error"]["code"] == "INVALID_PAYLOAD"
+      assert json_response(conn, 400)["error"]["code"] == "INVALID_BODY"
     end
 
     test "400s for a level it does not know", %{conn: conn} do
       conn = put_json(conn, "/v1/notifications/settings/servers/#{@s1}", %{"level" => "shouting"})
 
-      assert json_response(conn, 400)["error"]["code"] == "INVALID_PAYLOAD"
+      assert json_response(conn, 400)["error"]["code"] == "INVALID_BODY"
     end
 
     test "400s when level is not a string", %{conn: conn} do
       conn = put_json(conn, "/v1/notifications/settings/servers/#{@s1}", %{"level" => 3})
 
-      assert json_response(conn, 400)["error"]["code"] == "INVALID_PAYLOAD"
+      assert json_response(conn, 400)["error"]["code"] == "INVALID_BODY"
     end
 
     test "503s when the storage fails", %{conn: conn} do
@@ -295,13 +295,13 @@ defmodule NotificationsWeb.SettingsControllerTest do
     test "400s when muted is not a boolean", %{conn: conn} do
       conn = put_json(conn, "/v1/notifications/settings/channels/#{@c1}", %{"muted" => 1})
 
-      assert json_response(conn, 400)["error"]["code"] == "INVALID_PAYLOAD"
+      assert json_response(conn, 400)["error"]["code"] == "INVALID_BODY"
     end
 
     test "400s for a level it does not know", %{conn: conn} do
       conn = put_json(conn, "/v1/notifications/settings/channels/#{@c1}", %{"level" => "ALL"})
 
-      assert json_response(conn, 400)["error"]["code"] == "INVALID_PAYLOAD"
+      assert json_response(conn, 400)["error"]["code"] == "INVALID_BODY"
     end
   end
 end
