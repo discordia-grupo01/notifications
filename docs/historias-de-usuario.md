@@ -16,7 +16,7 @@ Las historias del catálogo de la cátedra que resuelve este servicio, con su n�
 | 64 | Silenciar notificaciones de un canal o servidor | 3 | `PUT /v1/notifications/settings/servers/{serverId}` y `PUT /v1/notifications/settings/channels/{channelId}` |
 | 65 | Configurar preferencias de notificación | 3 | `GET /v1/notifications/settings` y los mismos `PUT`, con el nivel de aviso (todo, solo menciones o nada) |
 | 66 | Notificaciones push | 5 | `GET /v1/notifications/push/vapid-public-key`, `GET` y `PUT /v1/notifications/push/settings`, `POST /v1/notifications/push/devices`, `DELETE /v1/notifications/push/devices/{id}` |
-| 67 | Centro de notificaciones con historial | 5 | `GET /v1/notifications/history` |
+| 67 | Centro de notificaciones con historial | 5 | `GET /v1/notifications/history`, `POST /v1/notifications/history/transfers/read` |
 
 ## Historias en las que participa
 
