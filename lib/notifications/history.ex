@@ -1,4 +1,5 @@
 defmodule Notifications.History do
+  alias Notifications.Realtime
   alias Notifications.Settings
   alias Notifications.UUID
   alias Notifications.Unread.{Access, Repo}
@@ -52,6 +53,35 @@ defmodule Notifications.History do
     [receiver_item(event) | sender_items(event)]
     |> Repo.impl().upsert_history()
   end
+
+  @max_read_batch 100
+
+  @spec max_read_batch() :: pos_integer()
+  def max_read_batch, do: @max_read_batch
+
+  @spec mark_transfers_read(String.t(), [String.t()], DateTime.t()) ::
+          :ok | {:error, :invalid_payload | term()}
+  def mark_transfers_read(user_id, transfer_ids, at \\ DateTime.utc_now())
+
+  def mark_transfers_read(user_id, transfer_ids, at)
+      when is_list(transfer_ids) and transfer_ids != [] and
+             length(transfer_ids) <= @max_read_batch do
+    if Enum.all?(transfer_ids, &(is_binary(&1) and UUID.valid?(&1))) do
+      with :ok <-
+             Repo.impl().mark_history_read(
+               user_id,
+               "ownership_transfer",
+               Enum.uniq(transfer_ids),
+               at
+             ) do
+        Realtime.history_changed(user_id)
+      end
+    else
+      {:error, :invalid_payload}
+    end
+  end
+
+  def mark_transfers_read(_user_id, _transfer_ids, _at), do: {:error, :invalid_payload}
 
   @spec sync_mentions(map()) :: {:ok, [String.t()]} | {:error, term()}
   def sync_mentions(%{message_id: message_id, author_id: author_id} = event) do
@@ -197,11 +227,17 @@ defmodule Notifications.History do
     |> render_message()
     |> Map.merge(%{
       "to_user_id" => doc["to_user_id"],
-      "transfer_status" => doc["transfer_status"]
+      "transfer_status" => doc["transfer_status"],
+      "read" => read?(doc)
     })
   end
 
   defp render(doc), do: render_message(doc)
+
+  defp read?(%{"read_at" => %DateTime{} = read_at, "occurred_at" => %DateTime{} = occurred_at}),
+    do: DateTime.compare(read_at, occurred_at) != :lt
+
+  defp read?(_doc), do: false
 
   defp render_message(doc) do
     %{

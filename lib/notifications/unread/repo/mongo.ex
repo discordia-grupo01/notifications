@@ -481,6 +481,18 @@ defmodule Notifications.Unread.Repo.Mongo do
   end
 
   @impl true
+  def mark_history_read(user_id, kind, message_ids, at) do
+    filter = %{"user_id" => user_id, "kind" => kind, "message_id" => %{"$in" => message_ids}}
+
+    case Mongo.update_many(@conn, @history, filter, %{"$set" => %{"read_at" => at}}) do
+      {:ok, _result} -> :ok
+      {:error, error} -> {:error, error}
+    end
+  rescue
+    error -> {:error, error}
+  end
+
+  @impl true
   def list_history(user_id, before, limit) do
     sort = [occurred_at: -1, message_id: -1]
 

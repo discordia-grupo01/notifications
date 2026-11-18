@@ -119,6 +119,11 @@ components:
           type: string
           x-struct:
           x-validate:
+        read:
+          description: 'Solo en `ownership_transfer`: `true` si el usuario ya la marcó como leída desde cualquier dispositivo.'
+          type: boolean
+          x-struct:
+          x-validate:
         server_id:
           description: Solo en `mention` y `ownership_transfer`.
           nullable: true
@@ -171,6 +176,26 @@ components:
       title: HistoryPage
       type: object
       x-struct: Elixir.NotificationsWeb.Schemas.HistoryPage
+      x-validate:
+    MarkTransfersReadRequest:
+      properties:
+        transfer_ids:
+          description: Ids de las transferencias (`message_id` de las entradas `ownership_transfer`).
+          items:
+            format: uuid
+            type: string
+            x-struct:
+            x-validate:
+          maxItems: 100
+          minItems: 1
+          type: array
+          x-struct:
+          x-validate:
+      required:
+        - transfer_ids
+      title: MarkTransfersReadRequest
+      type: object
+      x-struct: Elixir.NotificationsWeb.Schemas.MarkTransfersReadRequest
       x-validate:
     PushDevice:
       properties:
@@ -634,6 +659,43 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: No se pudo leer el historial
       summary: Historial de notificaciones del usuario
+      tags:
+        - history
+  /v1/notifications/history/transfers/read:
+    post:
+      callbacks: {}
+      description: Marca como leídas, para todos los dispositivos del usuario, las notificaciones de `ownership_transfer` con esos ids de transferencia. Solo afecta a las entradas del usuario que consulta; un id que no tiene entrada se ignora. Es idempotente. Avisa a los demás dispositivos conectados para que vuelvan a pedir el historial.
+      operationId: NotificationsWeb.HistoryController.read_transfers
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MarkTransfersReadRequest'
+        description: Ids de las transferencias
+        required: true
+      responses:
+        '204':
+          description: Marcadas como leídas
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: '`transfer_ids` falta, está vacío, tiene más de 100 ids o algún id no es un UUID'
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: 'Falta o es inválido el Authorization: Bearer <jwt>'
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: No se pudo guardar el estado de lectura
+      summary: Marca como leídas las notificaciones de transferencia de propiedad
       tags:
         - history
   /v1/notifications/push/devices:

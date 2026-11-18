@@ -18,6 +18,9 @@ defmodule Notifications.Realtime do
   def after_event(%Event.ServerDeleted{}), do: :ok
   def after_event(event), do: event |> pings() |> send_pings()
 
+  @spec history_changed(String.t()) :: :ok
+  def history_changed(user_id), do: send_pings([user(user_id, "notifications")])
+
   @spec pings(struct()) :: [ping()]
   def pings(%Event.MemberJoined{server_id: server_id, user_id: user_id}),
     do: [server(server_id, "members"), user(user_id, "servers", server_id), {:metrics, server_id}]

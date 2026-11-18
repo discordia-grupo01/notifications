@@ -637,4 +637,115 @@ defmodule Notifications.HistoryTest do
       refute Map.has_key?(direct, "to_user_id")
     end
   end
+
+  describe "list/2 read flag" do
+    defp transfer_doc(extra) do
+      Map.merge(
+        %{
+          "kind" => "ownership_transfer",
+          "message_id" => "t1",
+          "author_id" => "owner",
+          "to_user_id" => "member",
+          "transfer_status" => "accepted",
+          "server_id" => @s1,
+          "occurred_at" => @at
+        },
+        extra
+      )
+    end
+
+    defp read_flag(doc) do
+      expect(RepoMock, :list_history, fn @me, nil, 50 -> {:ok, [doc]} end)
+      assert {:ok, %{items: [item]}} = History.list(@me)
+      item["read"]
+    end
+
+    test "a transfer never marked is unread" do
+      refute read_flag(transfer_doc(%{}))
+    end
+
+    test "a transfer marked after it happened is read" do
+      assert read_flag(transfer_doc(%{"read_at" => ~U[2026-10-31 12:05:00.000Z]}))
+    end
+
+    test "a transfer marked at the very moment it happened is read" do
+      assert read_flag(transfer_doc(%{"read_at" => @at}))
+    end
+
+    test "a transfer that happened after it was marked is unread again" do
+      refute read_flag(transfer_doc(%{"read_at" => ~U[2026-10-31 11:00:00.000Z]}))
+    end
+
+    test "the flag only exists on transfers" do
+      expect(RepoMock, :list_history, fn @me, nil, 50 ->
+        {:ok,
+         [
+           %{
+             "kind" => "direct_message",
+             "message_id" => @m1,
+             "author_id" => "u2",
+             "conversation_id" => "conv-1",
+             "occurred_at" => @at,
+             "read_at" => @at
+           }
+         ]}
+      end)
+
+      assert {:ok, %{items: [item]}} = History.list(@me)
+      refute Map.has_key?(item, "read")
+    end
+  end
+
+  describe "mark_transfers_read/3" do
+    @t1 "11111111-aaaa-4aaa-8aaa-000000000001"
+    @t2 "11111111-aaaa-4aaa-8aaa-000000000002"
+
+    setup do
+      Application.put_env(:notifications, :push, Notifications.PushMock)
+      on_exit(fn -> Application.delete_env(:notifications, :push) end)
+      :ok
+    end
+
+    test "marks the user's transfers and tells their devices to reload" do
+      test = self()
+
+      expect(RepoMock, :mark_history_read, fn @me, "ownership_transfer", [@t1, @t2], @at ->
+        :ok
+      end)
+
+      expect(Notifications.PushMock, :publish, fn topic, "changed", payload ->
+        send(test, {:ping, topic, payload})
+        :ok
+      end)
+
+      assert History.mark_transfers_read(@me, [@t1, @t2], @at) == :ok
+      assert_received {:ping, "user:" <> @me, %{"resource" => "notifications"}}
+    end
+
+    test "drops repeated ids" do
+      expect(RepoMock, :mark_history_read, fn @me, "ownership_transfer", [@t1], @at -> :ok end)
+      stub(Notifications.PushMock, :publish, fn _topic, _event, _payload -> :ok end)
+
+      assert History.mark_transfers_read(@me, [@t1, @t1], @at) == :ok
+    end
+
+    test "does not announce a change when the storage fails" do
+      expect(RepoMock, :mark_history_read, fn _user, _kind, _ids, _at -> {:error, :timeout} end)
+
+      assert History.mark_transfers_read(@me, [@t1], @at) == {:error, :timeout}
+    end
+
+    for bad <- [nil, [], "t1", [123], ["not-a-uuid"], [nil]] do
+      test "rejects #{inspect(bad)}" do
+        assert History.mark_transfers_read(@me, unquote(Macro.escape(bad)), @at) ==
+                 {:error, :invalid_payload}
+      end
+    end
+
+    test "rejects more ids than the batch limit" do
+      too_many = List.duplicate(@t1, History.max_read_batch() + 1)
+
+      assert History.mark_transfers_read(@me, too_many, @at) == {:error, :invalid_payload}
+    end
+  end
 end
