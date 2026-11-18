@@ -118,4 +118,58 @@ defmodule NotificationsWeb.HistoryControllerTest do
 
     assert json_response(conn, 503)["error"]["code"] == "HISTORY_UNAVAILABLE"
   end
+
+  describe "POST /v1/notifications/history/transfers/read" do
+    @t1 "11111111-aaaa-4aaa-8aaa-000000000001"
+    @t2 "11111111-aaaa-4aaa-8aaa-000000000002"
+    @path "/v1/notifications/history/transfers/read"
+
+    setup do
+      Application.put_env(:notifications, :push, Notifications.PushMock)
+      on_exit(fn -> Application.delete_env(:notifications, :push) end)
+      stub(Notifications.PushMock, :publish, fn _topic, _event, _payload -> :ok end)
+      :ok
+    end
+
+    test "requires Authorization", %{conn: conn} do
+      assert json_response(post(conn, @path, %{"transfer_ids" => [@t1]}), 401)["error"]["code"] ==
+               "UNAUTHORIZED"
+    end
+
+    test "marks the transfers of the caller and answers 204", %{conn: conn} do
+      expect(RepoMock, :mark_history_read, fn @me,
+                                              "ownership_transfer",
+                                              [@t1, @t2],
+                                              %DateTime{} ->
+        :ok
+      end)
+
+      conn = conn |> authed() |> post(@path, %{"transfer_ids" => [@t1, @t2]})
+
+      assert response(conn, 204) == ""
+    end
+
+    for bad <- [
+          %{},
+          %{"transfer_ids" => []},
+          %{"transfer_ids" => "t1"},
+          %{"transfer_ids" => ["nope"]},
+          %{"transfer_ids" => [1]},
+          %{"other" => [@t1]}
+        ] do
+      test "400s for #{inspect(bad)}", %{conn: conn} do
+        conn = conn |> authed() |> post(@path, unquote(Macro.escape(bad)))
+
+        assert json_response(conn, 400)["error"]["code"] == "INVALID_PAYLOAD"
+      end
+    end
+
+    test "503s when the storage fails", %{conn: conn} do
+      expect(RepoMock, :mark_history_read, fn _user, _kind, _ids, _at -> {:error, :timeout} end)
+
+      conn = conn |> authed() |> post(@path, %{"transfer_ids" => [@t1]})
+
+      assert json_response(conn, 503)["error"]["code"] == "HISTORY_UNAVAILABLE"
+    end
+  end
 end

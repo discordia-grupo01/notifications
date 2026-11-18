@@ -275,4 +275,10 @@ defmodule Notifications.RealtimeTest do
 
     assert pings_of(event) == []
   end
+
+  test "history_changed tells the user to reload their notifications" do
+    assert Realtime.history_changed("u9") == :ok
+
+    assert collect([]) == [{"user:u9", %{"resource" => "notifications"}}]
+  end
 end

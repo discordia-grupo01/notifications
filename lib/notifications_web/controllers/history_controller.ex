@@ -43,6 +43,25 @@ defmodule NotificationsWeb.HistoryController do
         {"No se pudo leer el historial", "application/json", Schemas.ErrorResponse}
     ]
 
+  operation :read_transfers,
+    summary: "Marca como leídas las notificaciones de transferencia de propiedad",
+    description:
+      "Marca como leídas, para todos los dispositivos del usuario, las notificaciones de `ownership_transfer` con esos ids de transferencia. Solo afecta a las entradas del usuario que consulta; un id que no tiene entrada se ignora. Es idempotente. Avisa a los demás dispositivos conectados para que vuelvan a pedir el historial.",
+    request_body:
+      {"Ids de las transferencias", "application/json", Schemas.MarkTransfersReadRequest,
+       required: true},
+    responses: [
+      no_content: "Marcadas como leídas",
+      bad_request:
+        {"`transfer_ids` falta, está vacío, tiene más de 100 ids o algún id no es un UUID",
+         "application/json", Schemas.ErrorResponse},
+      unauthorized:
+        {"Falta o es inválido el Authorization: Bearer <jwt>", "application/json",
+         Schemas.ErrorResponse},
+      service_unavailable:
+        {"No se pudo guardar el estado de lectura", "application/json", Schemas.ErrorResponse}
+    ]
+
   def index(conn, params) do
     user_id = conn.assigns.user_id
 
@@ -63,6 +82,33 @@ defmodule NotificationsWeb.HistoryController do
         |> put_status(ApiError.http_status(:history_unavailable))
         |> json(ApiError.payload(:history_unavailable))
     end
+  end
+
+  def read_transfers(conn, %{"transfer_ids" => transfer_ids}) do
+    user_id = conn.assigns.user_id
+
+    case History.mark_transfers_read(user_id, transfer_ids) do
+      :ok ->
+        send_resp(conn, 204, "")
+
+      {:error, :invalid_payload} ->
+        conn
+        |> put_status(ApiError.http_status(:invalid_payload))
+        |> json(ApiError.payload(:invalid_payload))
+
+      {:error, reason} ->
+        Logger.error("history_read_failed", user_id: user_id, reason: Log.reason(reason))
+
+        conn
+        |> put_status(ApiError.http_status(:history_unavailable))
+        |> json(ApiError.payload(:history_unavailable))
+    end
+  end
+
+  def read_transfers(conn, _params) do
+    conn
+    |> put_status(ApiError.http_status(:invalid_payload))
+    |> json(ApiError.payload(:invalid_payload))
   end
 
   defp parse_limit(%{"limit" => raw}) when is_binary(raw) do

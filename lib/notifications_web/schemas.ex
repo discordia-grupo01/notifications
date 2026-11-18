@@ -213,9 +213,34 @@ defmodule NotificationsWeb.Schemas do
           enum: ["pending", "accepted", "rejected", "cancelled", "expired"],
           description:
             "Estado actual de la transferencia. Solo en `ownership_transfer`. La entrada del receptor se actualiza cuando se resuelve; la del dueño anterior aparece al resolverse."
+        },
+        read: %Schema{
+          type: :boolean,
+          description:
+            "Solo en `ownership_transfer`: `true` si el usuario ya la marcó como leída desde cualquier dispositivo."
         }
       },
       required: [:kind, :message_id, :author_id, :occurred_at]
+    })
+  end
+
+  defmodule MarkTransfersReadRequest do
+    require OpenApiSpex
+
+    OpenApiSpex.schema(%{
+      title: "MarkTransfersReadRequest",
+      type: :object,
+      properties: %{
+        transfer_ids: %Schema{
+          type: :array,
+          minItems: 1,
+          maxItems: 100,
+          items: %Schema{type: :string, format: :uuid},
+          description:
+            "Ids de las transferencias (`message_id` de las entradas `ownership_transfer`)."
+        }
+      },
+      required: [:transfer_ids]
     })
   end
 

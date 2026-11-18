@@ -579,6 +579,61 @@ if mongo_url do
 
       defp ids(items), do: Enum.map(items, & &1["message_id"])
 
+      defp transfer_item(user, n, attrs \\ %{}) do
+        history_item(
+          user,
+          n,
+          Map.merge(
+            %{
+              "kind" => "ownership_transfer",
+              "to_user_id" => "member",
+              "transfer_status" => "accepted",
+              "server_id" => "srv"
+            },
+            attrs
+          )
+        )
+      end
+
+      test "marks only the caller's transfers as read", %{user: u} do
+        :ok =
+          Repo.put_history([
+            transfer_item(u, 1),
+            transfer_item(u, 2),
+            transfer_item("other", 1)
+          ])
+
+        assert :ok = Repo.mark_history_read(u, "ownership_transfer", [message_id(1)], @t2)
+
+        assert {:ok, items} = Repo.list_history(u, nil, 50)
+        by_id = Map.new(items, &{&1["message_id"], &1})
+        assert by_id[message_id(1)]["read_at"] == @t2
+        refute Map.has_key?(by_id[message_id(2)], "read_at")
+
+        assert {:ok, [other]} = Repo.list_history("other", nil, 50)
+        refute Map.has_key?(other, "read_at")
+      end
+
+      test "does not mark entries of another kind", %{user: u} do
+        :ok = Repo.put_history([dm_item(u, 1)])
+
+        assert :ok = Repo.mark_history_read(u, "ownership_transfer", [message_id(1)], @t2)
+
+        assert {:ok, [item]} = Repo.list_history(u, nil, 50)
+        refute Map.has_key?(item, "read_at")
+      end
+
+      test "an update to the transfer keeps the read mark", %{user: u} do
+        :ok = Repo.put_history([transfer_item(u, 1, %{"transfer_status" => "pending"})])
+        :ok = Repo.mark_history_read(u, "ownership_transfer", [message_id(1)], @t2)
+
+        :ok = Repo.upsert_history([transfer_item(u, 1, %{"transfer_status" => "cancelled"})])
+
+        assert {:ok, [item]} = Repo.list_history(u, nil, 50)
+        assert item["transfer_status"] == "cancelled"
+        assert item["read_at"] == @t2
+      end
+
       test "lists a user's entries newest first and nobody else's", %{
         server: s,
         channel: c,

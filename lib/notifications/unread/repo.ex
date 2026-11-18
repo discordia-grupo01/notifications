@@ -80,6 +80,12 @@ defmodule Notifications.Unread.Repo do
               result()
   @callback put_history(items :: [map()]) :: result()
   @callback upsert_history(items :: [map()]) :: result()
+  @callback mark_history_read(
+              user_id :: String.t(),
+              kind :: String.t(),
+              message_ids :: [String.t()],
+              at :: DateTime.t()
+            ) :: result()
   @callback list_history(
               user_id :: String.t(),
               before :: {DateTime.t(), String.t()} | nil,
