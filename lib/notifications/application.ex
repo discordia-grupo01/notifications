@@ -13,6 +13,7 @@ defmodule Notifications.Application do
     children =
       log_shipper_children() ++
         [
+          Notifications.CircuitBreaker,
           {Phoenix.PubSub, name: Notifications.PubSub},
           Notifications.Delivery.Dispatcher,
           {Mongo,
