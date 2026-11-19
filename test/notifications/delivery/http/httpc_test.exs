@@ -1,6 +1,8 @@
 defmodule Notifications.Delivery.Http.HttpcTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Notifications.Delivery.Http
   alias Notifications.Delivery.Http.Httpc
 
@@ -75,5 +77,64 @@ defmodule Notifications.Delivery.Http.HttpcTest do
              nil
 
     assert Http.retry_after_ms(%{headers: []}) == nil
+  end
+
+  test "stops calling an endpoint that keeps failing and answers fast" do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+    {:ok, port} = :inet.port(listener)
+    test_pid = self()
+
+    server =
+      spawn_link(fn ->
+        for _ <- 1..5 do
+          {:ok, socket} = :gen_tcp.accept(listener, 5_000)
+          {:ok, _request} = :gen_tcp.recv(socket, 0, 2_000)
+          send(test_pid, :hit)
+
+          :gen_tcp.send(
+            socket,
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+          )
+
+          :gen_tcp.close(socket)
+        end
+      end)
+
+    url = "http://127.0.0.1:#{port}/push"
+    on_exit(fn -> Notifications.CircuitBreaker.reset({:http, {"http", "127.0.0.1", port}}) end)
+
+    capture_log(fn ->
+      for _ <- 1..5, do: assert({:ok, %{status: 503}} = Httpc.post(url, [], "x", 2_000))
+    end)
+
+    for _ <- 1..5, do: assert_receive(:hit)
+
+    assert Httpc.post(url, [], "x", 2_000) == {:error, :circuit_open}
+    refute_receive :hit, 100
+    Process.exit(server, :normal)
+  end
+
+  test "client errors do not open the circuit" do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+    {:ok, port} = :inet.port(listener)
+
+    spawn_link(fn ->
+      for _ <- 1..7 do
+        {:ok, socket} = :gen_tcp.accept(listener, 5_000)
+        {:ok, _request} = :gen_tcp.recv(socket, 0, 2_000)
+
+        :gen_tcp.send(
+          socket,
+          "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+
+        :gen_tcp.close(socket)
+      end
+    end)
+
+    url = "http://127.0.0.1:#{port}/push"
+    on_exit(fn -> Notifications.CircuitBreaker.reset({:http, {"http", "127.0.0.1", port}}) end)
+
+    for _ <- 1..7, do: assert({:ok, %{status: 404}} = Httpc.post(url, [], "x", 2_000))
   end
 end
