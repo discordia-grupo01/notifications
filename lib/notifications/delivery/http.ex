@@ -3,10 +3,12 @@ defmodule Notifications.Delivery.Http do
   @type response :: %{status: non_neg_integer(), headers: headers(), body: binary()}
 
   @callback post(url :: String.t(), headers(), body :: binary(), timeout_ms :: pos_integer()) ::
-              {:ok, response()} | {:error, :timeout | :connect_failed | :request_failed}
+              {:ok, response()}
+              | {:error, :timeout | :connect_failed | :request_failed | :circuit_open}
 
   @spec post(String.t(), headers(), binary(), pos_integer()) ::
-          {:ok, response()} | {:error, :timeout | :connect_failed | :request_failed}
+          {:ok, response()}
+          | {:error, :timeout | :connect_failed | :request_failed | :circuit_open}
   def post(url, headers, body, timeout_ms), do: impl().post(url, headers, body, timeout_ms)
 
   @spec header(response(), String.t()) :: String.t() | nil

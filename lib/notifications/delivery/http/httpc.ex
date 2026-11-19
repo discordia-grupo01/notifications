@@ -1,8 +1,19 @@
 defmodule Notifications.Delivery.Http.Httpc do
   @behaviour Notifications.Delivery.Http
 
+  alias Notifications.CircuitBreaker
+
   @impl true
   def post(url, headers, body, timeout_ms) do
+    CircuitBreaker.call({:http, endpoint(url)}, fn -> request(url, headers, body, timeout_ms) end)
+  end
+
+  defp endpoint(url) do
+    %URI{scheme: scheme, host: host, port: port} = URI.parse(url)
+    {scheme, host, port}
+  end
+
+  defp request(url, headers, body, timeout_ms) do
     {content_type, headers} = pop_content_type(headers)
 
     request =
