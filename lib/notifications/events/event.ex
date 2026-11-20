@@ -1,4 +1,6 @@
 defmodule Notifications.Events.Event do
+  alias Discordia.EventsContract.Admin
+
   defmodule ChannelCreated do
     @enforce_keys [:event_id, :occurred_at, :server_id, :channel_id, :name, :kind]
     defstruct [:event_id, :occurred_at, :server_id, :channel_id, :name, :kind]
@@ -156,6 +158,11 @@ defmodule Notifications.Events.Event do
     ]
   end
 
+  defmodule ServerDeletionNotice do
+    @enforce_keys [:event_id, :occurred_at, :server_id, :owner_id, :server_name]
+    defstruct [:event_id, :occurred_at, :server_id, :owner_id, :server_name]
+  end
+
   defmodule Ping do
     @enforce_keys [:event_id, :occurred_at, :routing_key, :fields]
     defstruct [:event_id, :occurred_at, :routing_key, :fields]
@@ -215,6 +222,7 @@ defmodule Notifications.Events.Event do
     {"servers.channel_created", ChannelCreated},
     {"servers.channel_deleted", ChannelDeleted},
     {"servers.server_deleted", ServerDeleted},
+    {"admin.server_deletion_notice", ServerDeletionNotice},
     {"servers.member_joined", MemberJoined},
     {"servers.member_left", MemberLeft},
     {"servers.role_updated", RoleUpdated},
@@ -260,7 +268,8 @@ defmodule Notifications.Events.Event do
   def routing_keys, do: Enum.map(@routing_keys, &elem(&1, 0)) ++ Map.keys(@ping_fields)
 
   @spec parse(String.t(), map()) ::
-          {:ok, struct()} | {:error, :unknown_routing_key | :invalid_payload}
+          {:ok, struct()}
+          | {:error, :unknown_routing_key | :invalid_payload | :invalid_signature}
   def parse(routing_key, payload) when is_map(payload) do
     case List.keyfind(@routing_keys, routing_key, 0) do
       nil ->
@@ -317,6 +326,14 @@ defmodule Notifications.Events.Event do
     with {:ok, base} <- strings(payload, ~w(event_id server_id)a),
          {:ok, channel_ids} <- string_list(payload, "channel_ids") do
       {:ok, Map.put(base, :channel_ids, channel_ids)}
+    end
+  end
+
+  defp fields(ServerDeletionNotice, payload) do
+    with {:ok, base} <- strings(payload, ~w(event_id server_id owner_id server_name)a) do
+      if Admin.verify_server_deletion_notice(payload, admin_events_secret()),
+        do: {:ok, base},
+        else: {:error, :invalid_signature}
     end
   end
 
@@ -447,6 +464,8 @@ defmodule Notifications.Events.Event do
       _invalid -> {:error, :invalid_payload}
     end
   end
+
+  defp admin_events_secret, do: Application.get_env(:notifications, :admin_events_hmac_secret)
 
   defp optional_time(payload, key) do
     case Map.get(payload, key) do

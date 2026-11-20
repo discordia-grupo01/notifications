@@ -21,6 +21,9 @@ defmodule Notifications.Realtime do
   @spec history_changed(String.t()) :: :ok
   def history_changed(user_id), do: send_pings([user(user_id, "notifications")])
 
+  @spec notices_changed(String.t()) :: :ok
+  def notices_changed(user_id), do: send_pings([user(user_id, "notices")])
+
   @spec pings(struct()) :: [ping()]
   def pings(%Event.MemberJoined{server_id: server_id, user_id: user_id}),
     do: [server(server_id, "members"), user(user_id, "servers", server_id), {:metrics, server_id}]
@@ -63,6 +66,8 @@ defmodule Notifications.Realtime do
     do: [{:metrics, event.server_id} | notifications_for(event.mentioned_user_ids)]
 
   def pings(%Event.MessageUpdated{} = event), do: notifications_for(event.mentioned_user_ids)
+
+  def pings(%Event.ServerDeletionNotice{owner_id: owner_id}), do: [user(owner_id, "notices")]
 
   def pings(%Event.DirectMessageCreated{recipient_id: recipient_id}),
     do: [user(recipient_id, "notifications")]

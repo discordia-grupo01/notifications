@@ -29,6 +29,9 @@ defmodule NotificationsWeb.Router do
     get "/history", HistoryController, :index
     post "/history/transfers/read", HistoryController, :read_transfers
 
+    get "/notices", NoticesController, :index
+    post "/notices/:id/seen", NoticesController, :seen
+
     get "/push/settings", PushController, :show_settings
     put "/push/settings", PushController, :update_settings
     post "/push/devices", PushController, :register_device

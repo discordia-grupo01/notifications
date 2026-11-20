@@ -4,6 +4,7 @@ defmodule Notifications.Events.Lifecycle do
   alias Notifications.Delivery
   alias Notifications.Events.Event
   alias Notifications.History
+  alias Notifications.Notices
   alias Notifications.Push
   alias Notifications.Realtime
   alias Notifications.Unread.{Position, Repo}
@@ -62,6 +63,12 @@ defmodule Notifications.Events.Lifecycle do
       Logger.info("server_deleted_applied", server_id: event.server_id)
     else
       other -> outcome(other, "servers.server_deleted")
+    end
+  end
+
+  defp do_handle(%Event.ServerDeletionNotice{} = event) do
+    with :ok <- Notices.record(event) do
+      Logger.info("server_deletion_notice_applied", server_id: event.server_id)
     end
   end
 

@@ -14,6 +14,8 @@ config :notifications, :unread_repo, Notifications.Unread.RepoMock
 config :notifications, :ticket_store, Notifications.Auth.TicketStoreMock
 config :notifications, :delivery_repo, Notifications.Delivery.RepoMock
 config :notifications, :delivery_http, Notifications.Delivery.HttpMock
+config :notifications, :notices_repo, Notifications.Notices.RepoMock
+config :notifications, :admin_events_hmac_secret, "test-secret"
 
 config :notifications, :push_senders, %{
   "webpush" => Notifications.Delivery.SenderMock,

@@ -15,6 +15,7 @@ defmodule NotificationsWeb.ApiError do
           | :unread_unavailable
           | :settings_unavailable
           | :history_unavailable
+          | :notices_unavailable
           | :device_limit
           | :push_unavailable
           | :push_not_configured
@@ -61,6 +62,11 @@ defmodule NotificationsWeb.ApiError do
       {"HISTORY_UNAVAILABLE",
        "No se pudo consultar el historial de notificaciones, intentá de nuevo en un momento."}
 
+  def describe(:notices_unavailable),
+    do:
+      {"NOTICES_UNAVAILABLE",
+       "No se pudo consultar los avisos de la plataforma, intentá de nuevo en un momento."}
+
   def describe(:device_limit),
     do:
       {"DEVICE_LIMIT",
@@ -98,6 +104,7 @@ defmodule NotificationsWeb.ApiError do
   def http_status(:push_not_configured), do: 404
   def http_status(:settings_unavailable), do: 503
   def http_status(:history_unavailable), do: 503
+  def http_status(:notices_unavailable), do: 503
   def http_status(:ticket_unavailable), do: 503
   def http_status(:unread_unavailable), do: 503
   def http_status(_other), do: 500

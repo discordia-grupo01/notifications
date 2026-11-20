@@ -200,6 +200,63 @@ components:
       type: object
       x-struct: Elixir.NotificationsWeb.Schemas.MarkTransfersReadRequest
       x-validate:
+    Notice:
+      properties:
+        id:
+          description: Id del aviso, para marcarlo como visto.
+          format: uuid
+          type: string
+          x-struct:
+          x-validate:
+        kind:
+          description: '`server_deleted`: el staff eliminó un servidor del que eras dueño.'
+          enum:
+            - server_deleted
+          type: string
+          x-struct:
+          x-validate:
+        occurred_at:
+          description: Cuándo se pidió el borrado.
+          format: date-time
+          type: string
+          x-struct:
+          x-validate:
+        server_id:
+          description: Servidor eliminado.
+          format: uuid
+          type: string
+          x-struct:
+          x-validate:
+        server_name:
+          description: Nombre que tenía el servidor cuando se pidió el borrado.
+          type: string
+          x-struct:
+          x-validate:
+      required:
+        - id
+        - kind
+        - server_id
+        - server_name
+        - occurred_at
+      title: Notice
+      type: object
+      x-struct: Elixir.NotificationsWeb.Schemas.Notice
+      x-validate:
+    NoticeList:
+      properties:
+        items:
+          description: Más viejos primero. Una lista vacía significa que no hay avisos sin ver.
+          items:
+            $ref: '#/components/schemas/Notice'
+          type: array
+          x-struct:
+          x-validate:
+      required:
+        - items
+      title: NoticeList
+      type: object
+      x-struct: Elixir.NotificationsWeb.Schemas.NoticeList
+      x-validate:
     PushDevice:
       properties:
         id:
@@ -701,6 +758,73 @@ paths:
       summary: Marca como leídas las notificaciones de transferencia de propiedad
       tags:
         - history
+  /v1/notifications/notices:
+    get:
+      callbacks: {}
+      description: 'Hoy hay un solo tipo, `server_deleted`: el staff eliminó un servidor del que el usuario era dueño. Vienen del más viejo al más nuevo. Un aviso deja de aparecer cuando se marca como visto. Si no hay ninguno, `items` viene vacío.'
+      operationId: NotificationsWeb.NoticesController.index
+      parameters: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NoticeList'
+          description: Avisos sin ver
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: 'Falta o es inválido el Authorization: Bearer <jwt>'
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: No se pudo leer los avisos
+      summary: Avisos de la plataforma que el usuario todavía no vio
+      tags:
+        - notices
+  /v1/notifications/notices/{id}/seen:
+    post:
+      callbacks: {}
+      description: Marca como visto, para todos los dispositivos del usuario, el aviso con ese `id`. Solo afecta a los avisos del usuario que consulta; un id que no existe o que ya estaba visto se ignora. Avisa a los demás dispositivos conectados para que vuelvan a pedir los avisos.
+      operationId: NotificationsWeb.NoticesController.seen
+      parameters:
+        - description: '`id` del aviso, como lo devuelve el listado.'
+          in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
+            x-struct:
+            x-validate:
+      responses:
+        '204':
+          description: Marcado como visto
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: El id no es un UUID
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: 'Falta o es inválido el Authorization: Bearer <jwt>'
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: No se pudo guardar que se vio
+      summary: Marca un aviso como visto
+      tags:
+        - notices
   /v1/notifications/push/devices:
     post:
       callbacks: {}
