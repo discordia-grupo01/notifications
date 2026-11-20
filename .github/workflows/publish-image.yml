@@ -26,3 +26,22 @@ jobs:
           docker build -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
           docker push "$IMAGE:${{ github.sha }}"
           docker push "$IMAGE:latest"
+
+  deploy:
+    needs: publish
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-notifications
+      cancel-in-progress: false
+    steps:
+      - name: Deploy a Oracle por SSH
+        env:
+          SSH_KEY: ${{ secrets.NOTIFICATIONS_VM_SSH_KEY }}
+          SSH_HOST: ${{ secrets.NOTIFICATIONS_VM_HOST }}
+          SSH_USER: ${{ secrets.NOTIFICATIONS_VM_USER }}
+          IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/discordia-notifications:${{ github.sha }}
+        run: |
+          install -m 600 /dev/null key
+          printf '%s\n' "$SSH_KEY" > key
+          ssh -i key -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 "$SSH_USER@$SSH_HOST" "~/deploy.sh '$IMAGE'"
