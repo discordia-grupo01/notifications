@@ -268,6 +268,55 @@ defmodule NotificationsWeb.Schemas do
     })
   end
 
+  defmodule Notice do
+    require OpenApiSpex
+
+    OpenApiSpex.schema(%{
+      title: "Notice",
+      type: :object,
+      properties: %{
+        id: %Schema{
+          type: :string,
+          format: :uuid,
+          description: "Id del aviso, para marcarlo como visto."
+        },
+        kind: %Schema{
+          type: :string,
+          enum: ["server_deleted"],
+          description: "`server_deleted`: el staff eliminó un servidor del que eras dueño."
+        },
+        server_id: %Schema{type: :string, format: :uuid, description: "Servidor eliminado."},
+        server_name: %Schema{
+          type: :string,
+          description: "Nombre que tenía el servidor cuando se pidió el borrado."
+        },
+        occurred_at: %Schema{
+          type: :string,
+          format: :"date-time",
+          description: "Cuándo se pidió el borrado."
+        }
+      },
+      required: [:id, :kind, :server_id, :server_name, :occurred_at]
+    })
+  end
+
+  defmodule NoticeList do
+    require OpenApiSpex
+
+    OpenApiSpex.schema(%{
+      title: "NoticeList",
+      type: :object,
+      properties: %{
+        items: %Schema{
+          type: :array,
+          description: "Más viejos primero. Una lista vacía significa que no hay avisos sin ver.",
+          items: Notice
+        }
+      },
+      required: [:items]
+    })
+  end
+
   defmodule PushDeviceRequest do
     require OpenApiSpex
 

@@ -115,6 +115,7 @@ if config_env() != :test do
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
 
   config :notifications, :push_delivery, push_delivery
+  config :notifications, :admin_events_hmac_secret, System.get_env("ADMIN_EVENTS_HMAC_SECRET", "")
 end
 
 if config_env() == :prod do

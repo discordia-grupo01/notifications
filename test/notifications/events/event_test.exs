@@ -22,9 +22,47 @@ defmodule Notifications.Events.EventTest do
                servers.word_filter_updated servers.moderation_action_recorded servers.report_updated
                servers.emoji_created servers.emoji_deleted servers.server_boost_updated
                servers.resource_changed billing.account_changed billing.premium_updated
-               admin.backoffice_changed
+               admin.backoffice_changed admin.server_deletion_notice
                voice.private_call platform.status_changed platform.health_changed
              ))
+  end
+
+  describe "admin.server_deletion_notice" do
+    # Mismo vector que events-contract/admin/vectors_test.go (secreto "test-secret").
+    @notice %{
+      "event_id" => "evt-123",
+      "occurred_at" => "2026-10-14T12:30:45.123456Z",
+      "server_id" => "server-42",
+      "owner_id" => "user-42",
+      "server_name" => "Club de Lectura",
+      "signature" => "890526dab913525952c35db1ec0ae624cc94928ce3192b1553c055413e6a060d"
+    }
+
+    test "parses a notice whose signature verifies" do
+      assert {:ok,
+              %Event.ServerDeletionNotice{
+                event_id: "evt-123",
+                server_id: "server-42",
+                owner_id: "user-42",
+                server_name: "Club de Lectura",
+                occurred_at: %DateTime{}
+              }} = Event.parse("admin.server_deletion_notice", @notice)
+    end
+
+    test "rejects a notice sent to another owner or with another name" do
+      for {key, value} <- [{"owner_id", "user-43"}, {"server_name", "Otro"}] do
+        assert {:error, :invalid_signature} ==
+                 Event.parse("admin.server_deletion_notice", Map.put(@notice, key, value))
+      end
+    end
+
+    test "rejects a notice without a signature or with missing fields" do
+      assert {:error, :invalid_signature} ==
+               Event.parse("admin.server_deletion_notice", Map.delete(@notice, "signature"))
+
+      assert {:error, :invalid_payload} ==
+               Event.parse("admin.server_deletion_notice", Map.delete(@notice, "owner_id"))
+    end
   end
 
   test "parses messaging.message_created" do

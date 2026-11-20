@@ -165,6 +165,7 @@ defmodule Notifications.Events.Consumer do
 
   defp discard_status(:unknown_routing_key), do: :discarded_unknown_routing_key
   defp discard_status(:invalid_payload), do: :discarded_invalid_payload
+  defp discard_status(:invalid_signature), do: :discarded_invalid_signature
 
   defp connect(url, queue) do
     with {:ok, conn} <- Notifications.Events.Connection.open(url),
