@@ -13,6 +13,7 @@ services:
       CHECK_ORIGIN: "false"
       MONGO_URL: mongodb://mongo:27017/notifications_dev
       RABBITMQ_URL: ${RABBITMQ_URL_DOCKER:-amqp://guest:guest@host.docker.internal:5672}
+      ADMIN_EVENTS_HMAC_SECRET: ${ADMIN_EVENTS_HMAC_SECRET:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

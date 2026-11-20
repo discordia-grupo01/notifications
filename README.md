@@ -14,11 +14,12 @@ Servicio de notificaciones de Discordia.
 
 ## Introducción
 
-`notifications` es el servicio que le avisa a cada usuario lo que se perdió y lo que cambió. Se divide en cuatro partes:
+`notifications` es el servicio que le avisa a cada usuario lo que se perdió y lo que cambió. Se divide en cinco partes:
 
 - **No leídos:** qué canales y servidores tienen mensajes sin leer, y cuáles tienen menciones. Sirve para los indicadores de la barra lateral.
 - **Silencios y preferencias:** silenciar un canal o un servidor y elegir qué se quiere recibir (todo, solo menciones o nada).
 - **Centro de notificaciones:** el historial de menciones, mensajes directos y ofrecimientos de transferencia de propiedad. Lo leído de las transferencias se guarda en el servidor (`POST /v1/notifications/history/transfers/read`), así que vale en todos los dispositivos del usuario.
+- **Avisos de la plataforma:** lo que el usuario tiene que ver una vez aunque haya estado desconectado. Hoy hay uno solo: el staff eliminó un servidor del que era dueño (`GET /v1/notifications/notices` y `POST /v1/notifications/notices/{id}/seen`). Ver [`docs/aviso-de-servidor-eliminado.md`](docs/aviso-de-servidor-eliminado.md).
 - **Push y avisos en vivo:** notificaciones al navegador y al celular, y un aviso corto por WebSocket cada vez que algo cambia en otro servicio, para que las pantallas se actualicen sin recargar.
 
 Está hecho en Elixir con Phoenix y guarda su estado en MongoDB. No llama a ningún otro servicio: todo lo que sabe lo aprende de los eventos de RabbitMQ (por eso RabbitMQ es obligatorio). Por ejemplo, para saber qué canales puede ver cada usuario guarda su propia copia de los permisos que publica `servers`.
@@ -95,6 +96,7 @@ Se leen del entorno o de un archivo `.env`. El archivo [`.env.example`](.env.exa
 | `RABBITMQ_URL` | `amqp://guest:guest@localhost:5672` | Conexión a RabbitMQ, sin barra final (una barra es el vhost vacío y el broker rechaza la conexión). Obligatoria. |
 | `CHECK_ORIGIN` | los dominios de la web | Orígenes permitidos para el WebSocket, separados por coma, o `false` para aceptar cualquiera. Solo en producción. |
 | `HISTORY_RETENTION_DAYS` | `0` | Días que se conserva cada entrada del historial. `0` = para siempre. |
+| `ADMIN_EVENTS_HMAC_SECRET` | vacío | Secreto compartido con admin para verificar la firma de `admin.server_deletion_notice`. Tiene que ser el mismo que en admin; vacío descarta todos los avisos. Es un secreto. |
 | `VAPID_PRIVATE_KEY` | vacío | Clave privada VAPID en base64url (se genera con `mix push.gen_vapid`). Sin ella no se envían pushes web. Es un secreto. |
 | `VAPID_SUBJECT` | `mailto:contacto@discordia.example` | Contacto que viaja en el push web. |
 | `EXPO_ACCESS_TOKEN` | vacío | Token de acceso de Expo, opcional. Es un secreto. |

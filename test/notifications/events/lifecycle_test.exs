@@ -30,6 +30,59 @@ defmodule Notifications.Events.LifecycleTest do
   defp alive, do: expect(RepoMock, :get_clock, fn "server:s1" -> nil end)
   defp channel_alive, do: expect(RepoMock, :get_clock, fn "channel:c1" -> nil end)
 
+  describe "admin.server_deletion_notice" do
+    test "stores one notice per owner and server and tells the owner to fetch them" do
+      event =
+        struct!(
+          Event.ServerDeletionNotice,
+          base(%{server_id: "s1", owner_id: "u1", server_name: "Club de Lectura"})
+        )
+
+      expect(Notifications.Notices.RepoMock, :insert_if_absent, fn doc ->
+        assert doc == %{
+                 "_id" => "u1:s1",
+                 "notice_id" => "e1",
+                 "user_id" => "u1",
+                 "kind" => "server_deleted",
+                 "server_id" => "s1",
+                 "server_name" => "Club de Lectura",
+                 "occurred_at" => @at,
+                 "seen_at" => nil
+               }
+
+        {:ok, :inserted}
+      end)
+
+      expect(PushMock, :publish, fn "user:u1", "changed", %{"resource" => "notices"} -> :ok end)
+
+      assert :ok = Lifecycle.handle(event)
+    end
+
+    test "a repeated deletion request keeps the notice it already had" do
+      event =
+        struct!(
+          Event.ServerDeletionNotice,
+          base(%{server_id: "s1", owner_id: "u1", server_name: "Club de Lectura"})
+        )
+
+      expect(Notifications.Notices.RepoMock, :insert_if_absent, fn _doc -> {:ok, :exists} end)
+
+      assert :ok = Lifecycle.handle(event)
+    end
+
+    test "a storage failure is retried" do
+      event =
+        struct!(
+          Event.ServerDeletionNotice,
+          base(%{server_id: "s1", owner_id: "u1", server_name: "Club de Lectura"})
+        )
+
+      expect(Notifications.Notices.RepoMock, :insert_if_absent, fn _doc -> {:error, :down} end)
+
+      assert {:error, :down} = Lifecycle.handle(event)
+    end
+  end
+
   describe "servers.channel_created" do
     test "stores the channel and asks the server's sockets to resync" do
       event =

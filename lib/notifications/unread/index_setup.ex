@@ -29,8 +29,9 @@ defmodule Notifications.Unread.IndexSetup do
   end
 
   defp ensure_indexes do
-    with :ok <- Notifications.Unread.Repo.impl().ensure_indexes() do
-      Notifications.Delivery.Repo.impl().ensure_indexes()
+    with :ok <- Notifications.Unread.Repo.impl().ensure_indexes(),
+         :ok <- Notifications.Delivery.Repo.impl().ensure_indexes() do
+      Notifications.Notices.Repo.impl().ensure_indexes()
     end
   end
 end
