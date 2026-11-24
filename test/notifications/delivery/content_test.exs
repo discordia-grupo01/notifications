@@ -157,6 +157,69 @@ defmodule Notifications.Delivery.ContentTest do
              Content.build(channel_event(%{content_preview: "@rol atención"}))
   end
 
+  @role "0d6a3a56-9a54-4f4e-9d34-1c2f7d7a9b11"
+  @other_role "7b1c2d3e-4f50-4a61-8b72-9c83d0e1f2a3"
+
+  test "a role mention is replaced by the name of the role" do
+    expect(RepoMock, :get_user_names, fn ["u1"] -> {:ok, %{"u1" => "Beto"}} end)
+    expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{}} end)
+    expect(UnreadRepoMock, :get_role_names, fn [@role] -> {:ok, %{@role => "admin"}} end)
+
+    assert {:ok, %{body: "Servidor · @admin atención"}} =
+             Content.build(channel_event(%{content_preview: "<@&#{@role}> atención"}))
+  end
+
+  test "a role nobody knows stays as a generic @rol" do
+    expect(RepoMock, :get_user_names, fn ["u1"] -> {:ok, %{"u1" => "Beto"}} end)
+    expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{}} end)
+    expect(UnreadRepoMock, :get_role_names, fn [@role] -> {:ok, %{}} end)
+
+    assert {:ok, %{body: "Servidor · @rol atención"}} =
+             Content.build(channel_event(%{content_preview: "<@&#{@role}> atención"}))
+  end
+
+  test "users and roles in the same preview are each resolved, roles with a single lookup" do
+    expect(RepoMock, :get_user_names, fn ["u1", "u2"] ->
+      {:ok, %{"u1" => "Beto", "u2" => "Ana"}}
+    end)
+
+    expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{}} end)
+
+    expect(UnreadRepoMock, :get_role_names, fn [@role, @other_role] ->
+      {:ok, %{@role => "admin", @other_role => "mods"}}
+    end)
+
+    preview = "<@&#{@role}> y <@&#{@other_role}> y <@&#{@role}>, hola <@u2>"
+
+    assert {:ok, %{body: "Servidor · @admin y @mods y @admin, hola @Ana"}} =
+             Content.build(channel_event(%{content_preview: preview}))
+  end
+
+  test "a role token with uppercase hex is looked up in lowercase" do
+    expect(RepoMock, :get_user_names, fn ["u1"] -> {:ok, %{"u1" => "Beto"}} end)
+    expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{}} end)
+    expect(UnreadRepoMock, :get_role_names, fn [@role] -> {:ok, %{@role => "admin"}} end)
+
+    assert {:ok, %{body: "Servidor · @admin"}} =
+             Content.build(channel_event(%{content_preview: "<@&#{String.upcase(@role)}>"}))
+  end
+
+  test "@everyone in the preview is left as it is and no role is looked up" do
+    expect(RepoMock, :get_user_names, fn ["u1"] -> {:ok, %{"u1" => "Beto"}} end)
+    expect(RepoMock, :get_server_names, fn _ids -> {:ok, %{}} end)
+
+    assert {:ok, %{body: "Servidor · @everyone hola"}} =
+             Content.build(channel_event(%{content_preview: "@everyone hola"}))
+  end
+
+  test "a failure reading the role names is returned" do
+    expect(RepoMock, :get_user_names, fn ["u1"] -> {:ok, %{"u1" => "Beto"}} end)
+    expect(UnreadRepoMock, :get_role_names, fn [@role] -> {:error, :timeout} end)
+
+    assert Content.build(channel_event(%{content_preview: "<@&#{@role}>"})) ==
+             {:error, :timeout}
+  end
+
   test "a name that looks like a regex replacement is not interpreted" do
     expect(RepoMock, :get_user_names, fn ["u1", "u2"] ->
       {:ok, %{"u1" => "Beto", "u2" => "Ana \\1 $&"}}

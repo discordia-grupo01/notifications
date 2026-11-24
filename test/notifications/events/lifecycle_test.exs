@@ -202,6 +202,30 @@ defmodule Notifications.Events.LifecycleTest do
   end
 
   describe "replica of the server's permissions" do
+    test "servers.role_updated stores the role name when it carries one" do
+      event =
+        struct!(
+          Event.RoleUpdated,
+          base(%{
+            server_id: "s1",
+            role_id: "r1",
+            permissions: [],
+            is_everyone: false,
+            name: "admin"
+          })
+        )
+
+      alive()
+
+      expect(RepoMock, :apply_role, fn "s1", "r1", [], false, @at, "admin" ->
+        {:ok, :applied}
+      end)
+
+      expect(PushMock, :publish, fn "server:s1", "resync", %{} -> :ok end)
+
+      assert Lifecycle.handle(event) == :ok
+    end
+
     test "servers.role_updated" do
       event =
         struct!(
@@ -216,7 +240,7 @@ defmodule Notifications.Events.LifecycleTest do
 
       alive()
 
-      expect(RepoMock, :apply_role, fn "s1", "r1", ["VIEW_CHANNELS"], true, @at ->
+      expect(RepoMock, :apply_role, fn "s1", "r1", ["VIEW_CHANNELS"], true, @at, nil ->
         {:ok, :applied}
       end)
 

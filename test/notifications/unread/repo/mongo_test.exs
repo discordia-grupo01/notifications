@@ -10,6 +10,7 @@ if mongo_url do
     @t1 ~U[2026-10-23 12:00:00.000Z]
     @t2 ~U[2026-10-23 12:00:01.000Z]
     @t3 ~U[2026-10-23 12:00:02.000Z]
+    @t4 ~U[2026-10-23 12:00:03.000Z]
 
     @collections ~w(
       channels event_clocks channel_activity read_markers unread_mentions
@@ -102,7 +103,7 @@ if mongo_url do
         Repo.upsert_channel(%{"_id" => channel, "server_id" => server, "kind" => "text"})
         record(channel, server, 1, "someone", [user])
         Repo.apply_server_owner(server, user, @t1)
-        Repo.apply_role(server, "r1", ["VIEW_CHANNELS"], true, @t1)
+        Repo.apply_role(server, "r1", ["VIEW_CHANNELS"], true, @t1, nil)
         Repo.apply_member_roles(server, user, ["r1"], @t1)
         Repo.apply_channel_overrides(server, channel, [], @t1)
 
@@ -922,24 +923,47 @@ if mongo_url do
       end
 
       test "roles are stored, updated and tombstoned", %{server: s} do
-        assert {:ok, :applied} = Repo.apply_role(s, "r1", ["VIEW_CHANNELS"], true, @t1)
+        assert {:ok, :applied} = Repo.apply_role(s, "r1", ["VIEW_CHANNELS"], true, @t1, nil)
 
         assert {:ok, :applied} =
-                 Repo.apply_role(s, "r1", ["VIEW_CHANNELS", "SEND_MESSAGES"], true, @t2)
+                 Repo.apply_role(s, "r1", ["VIEW_CHANNELS", "SEND_MESSAGES"], true, @t2, nil)
 
-        assert {:ok, :stale} = Repo.apply_role(s, "r1", [], false, @t1)
+        assert {:ok, :stale} = Repo.apply_role(s, "r1", [], false, @t1, nil)
 
         assert {:ok, [%{"_id" => "r1", "permissions" => ["VIEW_CHANNELS", "SEND_MESSAGES"]}]} =
                  Repo.list_roles([s])
 
         assert {:ok, :applied} = Repo.delete_role(s, "r1", @t3)
         assert {:ok, []} = Repo.list_roles([s])
-        assert {:ok, :stale} = Repo.apply_role(s, "r1", ["VIEW_CHANNELS"], true, @t2)
+        assert {:ok, :stale} = Repo.apply_role(s, "r1", ["VIEW_CHANNELS"], true, @t2, nil)
+      end
+
+      test "the role name is stored, kept by snapshots without one and dropped with the role", %{
+        server: s
+      } do
+        assert Repo.get_role_names([]) == {:ok, %{}}
+        assert Repo.get_role_names(["r1"]) == {:ok, %{}}
+
+        assert {:ok, :applied} = Repo.apply_role(s, "r1", ["VIEW_CHANNELS"], false, @t1, "admin")
+        assert {:ok, :applied} = Repo.apply_role(s, "r2", [], false, @t1, nil)
+        assert Repo.get_role_names(["r1", "r2", "r3"]) == {:ok, %{"r1" => "admin"}}
+
+        assert {:ok, :applied} = Repo.apply_role(s, "r1", ["VIEW_CHANNELS"], false, @t2, nil)
+        assert Repo.get_role_names(["r1"]) == {:ok, %{"r1" => "admin"}}
+
+        assert {:ok, :applied} = Repo.apply_role(s, "r1", ["VIEW_CHANNELS"], false, @t3, "mods")
+        assert Repo.get_role_names(["r1"]) == {:ok, %{"r1" => "mods"}}
+
+        assert {:ok, :stale} = Repo.apply_role(s, "r1", [], false, @t2, "viejo")
+        assert Repo.get_role_names(["r1"]) == {:ok, %{"r1" => "mods"}}
+
+        assert {:ok, :applied} = Repo.delete_role(s, "r1", @t4)
+        assert Repo.get_role_names(["r1"]) == {:ok, %{}}
       end
 
       test "deleting a role removes it from members and overrides", ctx do
         %{server: s, channel: c, user: u} = ctx
-        Repo.apply_role(s, "r1", ["VIEW_CHANNELS"], false, @t1)
+        Repo.apply_role(s, "r1", ["VIEW_CHANNELS"], false, @t1, nil)
         Repo.apply_member_roles(s, u, ["r1", "r2"], @t1)
 
         Repo.apply_channel_overrides(
