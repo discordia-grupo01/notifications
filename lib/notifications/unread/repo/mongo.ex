@@ -143,12 +143,14 @@ defmodule Notifications.Unread.Repo.Mongo do
     do: apply_snapshot(@replica_servers, server_id, %{"owner_id" => owner_id}, at)
 
   @impl true
-  def apply_role(server_id, role_id, permissions, is_everyone, %DateTime{} = at) do
+  def apply_role(server_id, role_id, permissions, is_everyone, %DateTime{} = at, name) do
     fields = %{
       "server_id" => server_id,
       "permissions" => permissions,
       "is_everyone" => is_everyone
     }
+
+    fields = if is_binary(name) and name != "", do: Map.put(fields, "name", name), else: fields
 
     apply_snapshot(@replica_roles, role_id, fields, at)
   end
@@ -254,6 +256,21 @@ defmodule Notifications.Unread.Repo.Mongo do
   def get_server_owners(server_ids) do
     with {:ok, docs} <- list(@replica_servers, %{"_id" => %{"$in" => server_ids}}) do
       {:ok, Map.new(docs, fn doc -> {doc["_id"], doc["owner_id"]} end)}
+    end
+  end
+
+  @impl true
+  def get_role_names([]), do: {:ok, %{}}
+
+  def get_role_names(role_ids) do
+    filter = %{
+      "_id" => %{"$in" => role_ids},
+      "deleted" => %{"$ne" => true},
+      "name" => %{"$type" => "string"}
+    }
+
+    with {:ok, docs} <- list(@replica_roles, filter) do
+      {:ok, Map.new(docs, fn doc -> {doc["_id"], doc["name"]} end)}
     end
   end
 

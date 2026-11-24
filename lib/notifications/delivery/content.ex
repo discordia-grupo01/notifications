@@ -5,7 +5,8 @@ defmodule Notifications.Delivery.Content do
 
   @default_user "Usuario"
   @default_mention "@usuario"
-  @mention ~r/<@([A-Za-z0-9_-]{1,64})>/
+  @default_role_mention "@rol"
+  @mention ~r/<@(&?)([A-Za-z0-9_-]{1,64})>/
   @default_server "Servidor"
   @default_channel "canal"
   @default_text "Nuevo mensaje"
@@ -115,28 +116,41 @@ defmodule Notifications.Delivery.Content do
   end
 
   defp author_and_preview(%{author_id: author_id, content_preview: preview}) do
-    ids = Enum.uniq([author_id | mention_ids(preview)])
+    {user_ids, role_ids} = mention_ids(preview)
+    ids = Enum.uniq([author_id | user_ids])
 
-    with {:ok, names} <- Repo.impl().get_user_names(ids) do
-      {:ok, Map.get(names, author_id) || @default_user, resolve_mentions(preview, names)}
+    with {:ok, names} <- Repo.impl().get_user_names(ids),
+         {:ok, role_names} <- get_role_names(role_ids) do
+      {:ok, Map.get(names, author_id) || @default_user,
+       resolve_mentions(preview, names, role_names)}
     end
   end
 
-  defp mention_ids(nil), do: []
+  defp mention_ids(nil), do: {[], []}
 
-  defp mention_ids(preview),
-    do: @mention |> Regex.scan(preview, capture: :all_but_first) |> List.flatten()
+  defp mention_ids(preview) do
+    tokens = Regex.scan(@mention, preview, capture: :all_but_first)
 
-  defp resolve_mentions(nil, _names), do: nil
+    users = for ["", id] <- tokens, do: id
+    roles = for ["&", id] <- tokens, do: String.downcase(id)
 
-  defp resolve_mentions(preview, names) do
-    Regex.replace(@mention, preview, fn _token, id ->
-      case Map.get(names, id) do
-        nil -> @default_mention
-        name -> "@" <> name
-      end
+    {Enum.uniq(users), Enum.uniq(roles)}
+  end
+
+  defp get_role_names([]), do: {:ok, %{}}
+  defp get_role_names(role_ids), do: UnreadRepo.impl().get_role_names(role_ids)
+
+  defp resolve_mentions(nil, _names, _role_names), do: nil
+
+  defp resolve_mentions(preview, names, role_names) do
+    Regex.replace(@mention, preview, fn
+      _token, "&", id -> mention(Map.get(role_names, String.downcase(id)), @default_role_mention)
+      _token, _kind, id -> mention(Map.get(names, id), @default_mention)
     end)
   end
+
+  defp mention(nil, default), do: default
+  defp mention(name, _default), do: "@" <> name
 
   defp user_name(user_id) do
     with {:ok, names} <- Repo.impl().get_user_names([user_id]) do

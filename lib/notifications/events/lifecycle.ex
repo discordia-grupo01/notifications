@@ -100,7 +100,8 @@ defmodule Notifications.Events.Lifecycle do
         event.role_id,
         event.permissions,
         event.is_everyone,
-        event.occurred_at
+        event.occurred_at,
+        event.name
       )
     end)
   end
