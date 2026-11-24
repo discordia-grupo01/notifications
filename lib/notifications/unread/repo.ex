@@ -24,8 +24,14 @@ defmodule Notifications.Unread.Repo do
   @callback get_channel(channel_id :: String.t()) :: map() | nil | {:error, term()}
 
   @callback apply_server_owner(String.t(), String.t(), DateTime.t()) :: write_result()
-  @callback apply_role(String.t(), String.t(), [String.t()], boolean(), DateTime.t()) ::
-              write_result()
+  @callback apply_role(
+              String.t(),
+              String.t(),
+              [String.t()],
+              boolean(),
+              DateTime.t(),
+              String.t() | nil
+            ) :: write_result()
   @callback delete_role(String.t(), String.t(), DateTime.t()) :: write_result()
   @callback apply_member_roles(String.t(), String.t(), [String.t()], DateTime.t()) ::
               write_result()
@@ -38,6 +44,8 @@ defmodule Notifications.Unread.Repo do
   @callback get_server_owners([String.t()]) ::
               {:ok, %{String.t() => String.t()}} | {:error, term()}
   @callback list_roles([String.t()]) :: {:ok, [map()]} | {:error, term()}
+  @callback get_role_names([String.t()]) ::
+              {:ok, %{String.t() => String.t()}} | {:error, term()}
   @callback list_channels([String.t()]) :: {:ok, [map()]} | {:error, term()}
   @callback list_overrides([String.t()]) :: {:ok, [map()]} | {:error, term()}
 

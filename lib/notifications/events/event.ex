@@ -28,7 +28,7 @@ defmodule Notifications.Events.Event do
 
   defmodule RoleUpdated do
     @enforce_keys [:event_id, :occurred_at, :server_id, :role_id, :permissions, :is_everyone]
-    defstruct [:event_id, :occurred_at, :server_id, :role_id, :permissions, :is_everyone]
+    defstruct [:event_id, :occurred_at, :server_id, :role_id, :permissions, :is_everyone, :name]
   end
 
   defmodule RoleDeleted do
@@ -347,7 +347,10 @@ defmodule Notifications.Events.Event do
          {:ok, permissions} <- string_list(payload, "permissions"),
          %{"is_everyone" => is_everyone} when is_boolean(is_everyone) <- payload do
       {:ok,
-       base |> Map.put(:permissions, Enum.uniq(permissions)) |> Map.put(:is_everyone, is_everyone)}
+       base
+       |> Map.put(:permissions, Enum.uniq(permissions))
+       |> Map.put(:is_everyone, is_everyone)
+       |> Map.put(:name, role_name(payload))}
     else
       _invalid -> {:error, :invalid_payload}
     end
@@ -464,6 +467,9 @@ defmodule Notifications.Events.Event do
       _invalid -> {:error, :invalid_payload}
     end
   end
+
+  defp role_name(%{"name" => name}) when is_binary(name) and name != "", do: name
+  defp role_name(_payload), do: nil
 
   defp admin_events_secret, do: Application.get_env(:notifications, :admin_events_hmac_secret)
 

@@ -449,6 +449,22 @@ defmodule Notifications.Events.EventTest do
              {:error, :invalid_payload}
   end
 
+  test "role_updated carries the role name when it comes, and none when it does not" do
+    ok =
+      base(%{"server_id" => "s", "role_id" => "r", "permissions" => [], "is_everyone" => false})
+
+    assert {:ok, %Event.RoleUpdated{name: nil}} = Event.parse("servers.role_updated", ok)
+
+    assert {:ok, %Event.RoleUpdated{name: "admin"}} =
+             Event.parse("servers.role_updated", Map.put(ok, "name", "admin"))
+
+    assert {:ok, %Event.RoleUpdated{name: nil}} =
+             Event.parse("servers.role_updated", Map.put(ok, "name", ""))
+
+    assert {:ok, %Event.RoleUpdated{name: nil}} =
+             Event.parse("servers.role_updated", Map.put(ok, "name", 7))
+  end
+
   test "channel overrides reject malformed entries" do
     bad = [
       "x",
