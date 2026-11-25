@@ -14,17 +14,27 @@ defmodule Notifications.Delivery.Dispatcher do
         id: __MODULE__
       )
 
-  @spec dispatch(String.t(), [map()], %{title: String.t(), body: String.t(), data: map()}) :: :ok
+  # Devuelve {:error, :overloaded} si algún dispositivo no entró en el grupo,
+  # para que el evento se reintente; los que sí entraron quedan reservados por
+  # su claim y el reintento no los repite.
+  @spec dispatch(String.t(), [map()], %{title: String.t(), body: String.t(), data: map()}) ::
+          :ok | {:error, :overloaded}
   def dispatch(event_id, devices, payload) do
-    Enum.each(devices, fn device ->
-      case Task.Supervisor.start_child(@supervisor, fn -> deliver(event_id, device, payload) end) do
-        {:ok, _pid} ->
-          :ok
+    dropped =
+      Enum.count(devices, fn device ->
+        case Task.Supervisor.start_child(@supervisor, fn ->
+               deliver(event_id, device, payload)
+             end) do
+          {:ok, _pid} ->
+            false
 
-        {:error, :max_children} ->
-          Logger.warning("push_dropped", event_id: event_id, reason: "overloaded")
-      end
-    end)
+          {:error, :max_children} ->
+            Logger.warning("push_dropped", event_id: event_id, reason: "overloaded")
+            true
+        end
+      end)
+
+    if dropped == 0, do: :ok, else: {:error, :overloaded}
   end
 
   @spec deliver(String.t(), map(), map()) :: :ok | :duplicate

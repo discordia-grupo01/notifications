@@ -5,18 +5,23 @@ defmodule Notifications.Delivery do
   alias Notifications.Events.Event
   alias Notifications.Log
 
-  @spec notify(struct()) :: :ok
+  # Un error acá es transitorio (Mongo no respondió, el grupo de envíos está
+  # lleno): se devuelve para que el consumer reintente el evento. Es seguro
+  # repetirlo porque el claim por evento y dispositivo evita el push doble.
+  @spec notify(struct()) :: :ok | {:error, term()}
   def notify(event) do
     case run(event) do
       :ok ->
         :ok
 
-      {:error, reason} ->
+      {:error, reason} = error ->
         Logger.warning("push_skipped", event_id: event.event_id, reason: Log.reason(reason))
+        error
     end
   rescue
     error ->
       Logger.warning("push_skipped", event_id: event.event_id, reason: Log.reason(error))
+      {:error, error}
   end
 
   @spec notify_edit(struct(), [String.t()]) :: :ok
@@ -70,10 +75,12 @@ defmodule Notifications.Delivery do
   defp send_to_devices(event, recipients, user_ids) do
     with {:ok, devices} <- Repo.impl().list_devices(user_ids),
          {:ok, content} <- content(event, devices) do
-      Enum.each(devices, fn device ->
+      devices
+      |> Enum.map(fn device ->
         payload = put_kind(content, Map.fetch!(recipients, device["user_id"]))
         Dispatcher.dispatch(event.event_id, [device], payload)
       end)
+      |> Enum.find(:ok, &(&1 != :ok))
     end
   end
 

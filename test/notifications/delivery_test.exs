@@ -173,18 +173,18 @@ defmodule Notifications.DeliveryTest do
     for id <- ["d1", "d2", "d3"], do: assert_received({:sent, ^id})
   end
 
-  test "a failure while preparing the push is logged and never raised" do
+  test "a failure while preparing the push is logged and returned so the event is retried" do
     expect(RepoMock, :list_push_disabled, fn _ids -> {:error, :timeout} end)
 
-    log = capture_log(fn -> assert Delivery.notify(direct()) == :ok end)
+    log = capture_log(fn -> assert Delivery.notify(direct()) == {:error, :timeout} end)
     assert log =~ "push_skipped"
     refute log =~ "hola"
   end
 
-  test "an unexpected exception is logged and never raised" do
+  test "an unexpected exception is logged and returned as an error, never raised" do
     expect(RepoMock, :list_push_disabled, fn _ids -> raise "boom" end)
 
-    log = capture_log(fn -> assert Delivery.notify(direct()) == :ok end)
+    log = capture_log(fn -> assert {:error, %RuntimeError{}} = Delivery.notify(direct()) end)
     assert log =~ "push_skipped"
   end
 

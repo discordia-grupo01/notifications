@@ -107,7 +107,7 @@ defmodule Notifications.Delivery.DispatcherTest do
     assert_received {:sent, "d2"}
   end
 
-  test "when too many deliveries are in flight the extra ones are dropped, not queued" do
+  test "when too many deliveries are in flight the extra ones are reported as overloaded, not queued" do
     test_pid = self()
     stub(RepoMock, :claim_delivery, fn _e, _d, _at -> :claimed end)
     stub(RepoMock, :mark_device, fn _id, _outcome -> :ok end)
@@ -122,7 +122,10 @@ defmodule Notifications.Delivery.DispatcherTest do
 
     devices = for n <- 1..8, do: device(%{"_id" => "d#{n}"})
 
-    log = capture_log(fn -> Dispatcher.dispatch("e1", devices, @payload) end)
+    log =
+      capture_log(fn ->
+        assert Dispatcher.dispatch("e1", devices, @payload) == {:error, :overloaded}
+      end)
 
     assert log =~ "push_dropped"
     pids = Task.Supervisor.children(Notifications.Delivery.TaskSupervisor)
