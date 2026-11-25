@@ -564,11 +564,30 @@ defmodule Notifications.Events.LifecycleTest do
       assert_received :devices_asked
     end
 
-    test "a push problem never fails the event" do
+    test "a transient push problem fails the event so it is retried" do
       stub(RepoMock, :put_history, fn _items -> :ok end)
       stub(DeliveryRepoMock, :list_push_disabled, fn _ids -> {:error, :timeout} end)
 
+      assert Lifecycle.handle(direct_event()) == {:error, :timeout}
+    end
+
+    test "the retry after a transient push problem pushes without repeating history" do
+      test_pid = self()
+      stub(RepoMock, :put_history, fn _items -> :ok end)
+
+      expect(DeliveryRepoMock, :list_push_disabled, fn _ids -> {:error, :timeout} end)
+      assert Lifecycle.handle(direct_event()) == {:error, :timeout}
+
+      expect(DeliveryRepoMock, :list_push_disabled, fn _ids -> {:ok, []} end)
+      expect(DeliveryRepoMock, :get_presence, fn _ids -> {:ok, %{}} end)
+
+      expect(DeliveryRepoMock, :list_devices, fn ["u2"] ->
+        send(test_pid, :devices_asked)
+        {:ok, []}
+      end)
+
       assert Lifecycle.handle(direct_event()) == :ok
+      assert_received :devices_asked
     end
   end
 
