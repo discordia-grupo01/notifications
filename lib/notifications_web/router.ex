@@ -7,6 +7,7 @@ defmodule NotificationsWeb.Router do
 
   pipeline :authenticated do
     plug NotificationsWeb.Plugs.Authenticate
+    plug NotificationsWeb.Plugs.PathParamLength
   end
 
   scope "/", NotificationsWeb do

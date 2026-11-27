@@ -29,7 +29,7 @@ defmodule NotificationsWeb.NoticesController do
     parameters: [
       id: [
         in: :path,
-        schema: %OpenApiSpex.Schema{type: :string, format: :uuid},
+        schema: %OpenApiSpex.Schema{type: :string, format: :uuid, maxLength: 36},
         required: true,
         description: "`id` del aviso, como lo devuelve el listado."
       ]
