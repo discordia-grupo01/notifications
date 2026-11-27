@@ -29,7 +29,12 @@ defmodule NotificationsWeb.SettingsController do
     description:
       "Acepta `muted`, `level` o ambos; solo cambia lo que se manda. Silenciar apaga todos los avisos destacados de sus canales (la actividad sigue contando como no leída). `level` elige qué avisa: `all` (todos los mensajes), `mentions` (solo menciones, el valor por defecto) o `none`. `level: null` borra la preferencia. Un canal con su propia preferencia gana sobre la del servidor; silenciar siempre gana. Es idempotente y las otras sesiones del usuario se enteran por `snapshot`.",
     parameters: [
-      server_id: [in: :path, description: "Id del servidor", type: :string, required: true]
+      server_id: [
+        in: :path,
+        description: "Id del servidor",
+        schema: %OpenApiSpex.Schema{type: :string, maxLength: 64},
+        required: true
+      ]
     ],
     request_body: {"Estado deseado", "application/json", Schemas.SettingsRequest, required: true},
     responses: [
@@ -50,7 +55,12 @@ defmodule NotificationsWeb.SettingsController do
     description:
       "Acepta `muted`, `level` o ambos; solo cambia lo que se manda. `level` elige qué avisa el canal: `all`, `mentions` o `none`, y reemplaza al nivel del servidor. `level: null` borra la preferencia y el canal vuelve a heredar. Para fijar algo hay que poder ver el canal; borrar o reactivar no tiene esa condición. Es idempotente y las otras sesiones del usuario se enteran por `snapshot`.",
     parameters: [
-      channel_id: [in: :path, description: "Id del canal", type: :string, required: true]
+      channel_id: [
+        in: :path,
+        description: "Id del canal",
+        schema: %OpenApiSpex.Schema{type: :string, maxLength: 64},
+        required: true
+      ]
     ],
     request_body: {"Estado deseado", "application/json", Schemas.SettingsRequest, required: true},
     responses: [
