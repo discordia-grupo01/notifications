@@ -67,10 +67,17 @@ defmodule NotificationsWeb.PushController do
     description:
       "Se llama al cerrar sesión o al desactivar el permiso. Es idempotente: si el `id` no existe o es de otro usuario responde igual.",
     parameters: [
-      id: [in: :path, description: "Id devuelto al registrar el dispositivo", type: :string]
+      id: [
+        in: :path,
+        description: "Id devuelto al registrar el dispositivo",
+        schema: %OpenApiSpex.Schema{type: :string, maxLength: 64}
+      ]
     ],
     responses: [
       no_content: "Dispositivo quitado",
+      bad_request:
+        {"El `id` supera los 64 caracteres (`INVALID_BODY`)", "application/json",
+         Schemas.ErrorResponse},
       unauthorized:
         {"Falta o es inválido el Authorization: Bearer <jwt>", "application/json",
          Schemas.ErrorResponse},
