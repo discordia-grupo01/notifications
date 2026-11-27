@@ -81,18 +81,36 @@ defmodule Notifications.Delivery.DevicesTest do
     end
   end
 
-  test "rejects credentials of the other provider mixed into the request" do
+  test "rejects invalid credentials of the other provider that come with the request" do
     expo = %{"provider" => "expo", "platform" => "android", "token" => @token}
 
     for stray <- [
           %{"p256dh" => "%24%7B7%2A7%7D"},
-          %{"auth" => "du3fiXjeDFjjgN6zPQA24E"},
-          %{"endpoint" => "https://fcm.googleapis.com/fcm/send/abc"}
+          %{"auth" => "%24%7B7%2A7%7D"},
+          %{"endpoint" => "http://example.com/x"},
+          %{"p256dh" => 1}
         ] do
       assert Devices.register("u1", Map.merge(expo, stray)) == {:error, :invalid_payload}
     end
 
-    assert Devices.register("u1", web_params(%{"token" => @token})) == {:error, :invalid_payload}
+    assert Devices.register("u1", web_params(%{"token" => "not-an-expo-token"})) ==
+             {:error, :invalid_payload}
+  end
+
+  test "accepts valid credentials of the other provider alongside the right ones" do
+    stub(RepoMock, :put_device, fn _user, _attrs, _max -> {:ok, %{id: "id3", created: true}} end)
+    web = web_params()
+
+    assert {:ok, _device} =
+             Devices.register(
+               "u1",
+               Map.merge(
+                 %{"provider" => "expo", "platform" => "android", "token" => @token},
+                 Map.take(web, ["endpoint", "p256dh", "auth"])
+               )
+             )
+
+    assert {:ok, _device} = Devices.register("u1", web_params(%{"token" => @token}))
   end
 
   test "rejects an Expo token that does not look like one" do

@@ -4,7 +4,6 @@ defmodule Notifications.Delivery.Devices do
 
   @providers ~w(webpush expo)
   @platforms ~w(web android ios)
-  @webpush_fields ~w(endpoint p256dh auth)
   @expo_token ~r/\A(Exponent|Expo)PushToken\[[A-Za-z0-9_\-]{1,100}\]\z/
   @max_endpoint 2_048
 
@@ -64,7 +63,7 @@ defmodule Notifications.Delivery.Devices do
 
   defp credential("expo", platform, %{"token" => token} = params)
        when platform in ["android", "ios"] and is_binary(token) do
-    if not has_any?(params, @webpush_fields) and Regex.match?(@expo_token, token),
+    if valid_webpush_fields?(params) and Regex.match?(@expo_token, token),
       do: {:ok, %{"token" => token}, token},
       else: {:error, :invalid_payload}
   end
@@ -75,7 +74,7 @@ defmodule Notifications.Delivery.Devices do
          %{"endpoint" => endpoint, "p256dh" => p256dh, "auth" => auth} = params
        )
        when is_binary(endpoint) and is_binary(p256dh) and is_binary(auth) do
-    if not Map.has_key?(params, "token") and valid_endpoint?(endpoint) and key?(p256dh, 65) and
+    if valid_expo_token_if_present?(params) and valid_endpoint?(endpoint) and key?(p256dh, 65) and
          key?(auth, 16),
        do: {:ok, %{"endpoint" => endpoint, "p256dh" => p256dh, "auth" => auth}, endpoint},
        else: {:error, :invalid_payload}
@@ -83,7 +82,22 @@ defmodule Notifications.Delivery.Devices do
 
   defp credential(_provider, _platform, _params), do: {:error, :invalid_payload}
 
-  defp has_any?(params, fields), do: Enum.any?(fields, &Map.has_key?(params, &1))
+  defp valid_webpush_fields?(params) do
+    field_ok?(params, "endpoint", &valid_endpoint?/1) and
+      field_ok?(params, "p256dh", &key?(&1, 65)) and
+      field_ok?(params, "auth", &key?(&1, 16))
+  end
+
+  defp valid_expo_token_if_present?(params),
+    do: field_ok?(params, "token", &Regex.match?(@expo_token, &1))
+
+  defp field_ok?(params, field, valid?) do
+    case Map.fetch(params, field) do
+      :error -> true
+      {:ok, value} when is_binary(value) -> valid?.(value)
+      {:ok, _other} -> false
+    end
+  end
 
   defp valid_endpoint?(endpoint) do
     byte_size(endpoint) <= @max_endpoint and
