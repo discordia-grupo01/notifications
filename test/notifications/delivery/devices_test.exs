@@ -81,6 +81,20 @@ defmodule Notifications.Delivery.DevicesTest do
     end
   end
 
+  test "rejects credentials of the other provider mixed into the request" do
+    expo = %{"provider" => "expo", "platform" => "android", "token" => @token}
+
+    for stray <- [
+          %{"p256dh" => "%24%7B7%2A7%7D"},
+          %{"auth" => "du3fiXjeDFjjgN6zPQA24E"},
+          %{"endpoint" => "https://fcm.googleapis.com/fcm/send/abc"}
+        ] do
+      assert Devices.register("u1", Map.merge(expo, stray)) == {:error, :invalid_payload}
+    end
+
+    assert Devices.register("u1", web_params(%{"token" => @token})) == {:error, :invalid_payload}
+  end
+
   test "rejects an Expo token that does not look like one" do
     for token <- [
           "",

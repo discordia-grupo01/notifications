@@ -4,6 +4,7 @@ defmodule Notifications.Delivery.Devices do
 
   @providers ~w(webpush expo)
   @platforms ~w(web android ios)
+  @webpush_fields ~w(endpoint p256dh auth)
   @expo_token ~r/\A(Exponent|Expo)PushToken\[[A-Za-z0-9_\-]{1,100}\]\z/
   @max_endpoint 2_048
 
@@ -61,21 +62,28 @@ defmodule Notifications.Delivery.Devices do
 
   defp parse(_params), do: {:error, :invalid_payload}
 
-  defp credential("expo", platform, %{"token" => token})
+  defp credential("expo", platform, %{"token" => token} = params)
        when platform in ["android", "ios"] and is_binary(token) do
-    if Regex.match?(@expo_token, token),
+    if not has_any?(params, @webpush_fields) and Regex.match?(@expo_token, token),
       do: {:ok, %{"token" => token}, token},
       else: {:error, :invalid_payload}
   end
 
-  defp credential("webpush", "web", %{"endpoint" => endpoint, "p256dh" => p256dh, "auth" => auth})
+  defp credential(
+         "webpush",
+         "web",
+         %{"endpoint" => endpoint, "p256dh" => p256dh, "auth" => auth} = params
+       )
        when is_binary(endpoint) and is_binary(p256dh) and is_binary(auth) do
-    if valid_endpoint?(endpoint) and key?(p256dh, 65) and key?(auth, 16),
-      do: {:ok, %{"endpoint" => endpoint, "p256dh" => p256dh, "auth" => auth}, endpoint},
-      else: {:error, :invalid_payload}
+    if not Map.has_key?(params, "token") and valid_endpoint?(endpoint) and key?(p256dh, 65) and
+         key?(auth, 16),
+       do: {:ok, %{"endpoint" => endpoint, "p256dh" => p256dh, "auth" => auth}, endpoint},
+       else: {:error, :invalid_payload}
   end
 
   defp credential(_provider, _platform, _params), do: {:error, :invalid_payload}
+
+  defp has_any?(params, fields), do: Enum.any?(fields, &Map.has_key?(params, &1))
 
   defp valid_endpoint?(endpoint) do
     byte_size(endpoint) <= @max_endpoint and
